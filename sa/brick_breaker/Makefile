@@ -1,7 +1,7 @@
 # Brick Breaker — Makefile (uses w64devkit bundled with raylib)
 
 CC      = gcc
-CFLAGS  = -std=c99 -Wall -Wextra -O2
+CFLAGS  = -std=c99 -Wall -Wextra -O2 -mwindows
 TARGET  = BrickBreaker
 SRC     = src/main.c
 

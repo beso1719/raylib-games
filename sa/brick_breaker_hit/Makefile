@@ -1,7 +1,7 @@
 # Brick Breaker Hit — Makefile (uses w64devkit bundled with raylib)
 
 CC      = gcc
-CFLAGS  = -std=c99 -Wall -Wextra -O2
+CFLAGS  = -std=c99 -Wall -Wextra -O2 -mwindows
 TARGET  = BrickBreakerHit
 SRC     = src/main.c
 
