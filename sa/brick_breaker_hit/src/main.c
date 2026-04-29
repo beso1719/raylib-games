@@ -6,11 +6,11 @@
 #include <stdio.h>
 
 // ── Constants ────────────────────────────────────────────────────────────────
-#define SCREEN_W              480
+#define SCREEN_W              540
 #define SCREEN_H              720
-#define GRID_COLS             7
+#define GRID_COLS             8
 #define GRID_ROWS             9
-#define CELL_SIZE             60.0f
+#define CELL_SIZE             58.0f
 #define GRID_OFFSET_X         ((SCREEN_W - GRID_COLS * CELL_SIZE) / 2.0f)
 #define GRID_OFFSET_Y         52.0f
 #define LAUNCHER_Y            (SCREEN_H - 52.0f)
@@ -26,7 +26,7 @@
 #define MAX_SCORES            5
 #define NAME_LEN              12
 #define ROUNDS_PER_LEVEL      10
-#define MAX_SELECTABLE_LEVELS 12
+#define MAX_SELECTABLE_LEVELS 20
 #define TRAIL_LEN             12
 #define MAX_PARTICLES         300
 #define MAX_STARS             100
@@ -34,7 +34,7 @@
 #define INITIAL_BALLS         7
 
 // ── Menu button layout ────────────────────────────────────────────────────────
-#define MENU_BTN_W   260
+#define MENU_BTN_W   280
 #define MENU_BTN_H   54
 #define MENU_BTN_X   ((SCREEN_W - MENU_BTN_W) / 2)
 #define MENU_BTN_Y0  296
@@ -164,8 +164,24 @@ static const Theme THEMES[] = {
     {{40,15,5,255},{28,10,3,255},{220,100,30,20},{255,160,40,255},{255,50,50,200},{255,130,30,255},{180,80,15,255}},
     // 12 Void
     {{15,5,30,255},{8,3,20,255},{100,40,160,20},{180,80,255,255},{255,60,100,200},{200,60,255,255},{120,30,180,255}},
+    // 13 Arctic
+    {{12,22,40,255},{7,14,28,255},{100,190,240,20},{200,240,255,255},{255,80,60,200},{160,225,255,255},{80,170,220,255}},
+    // 14 Ember
+    {{38,12,4,255},{24,7,2,255},{220,80,20,20},{255,140,30,255},{60,180,255,200},{255,110,20,255},{200,65,10,255}},
+    // 15 Forest
+    {{4,28,10,255},{2,18,6,255},{30,160,60,20},{50,220,90,255},{255,90,40,200},{30,200,70,255},{15,130,40,255}},
+    // 16 Galaxy
+    {{8,5,38,255},{5,3,25,255},{80,50,200,20},{160,110,255,255},{255,60,80,200},{140,80,255,255},{80,40,200,255}},
+    // 17 Neon
+    {{35,4,28,255},{22,2,18,255},{220,40,180,20},{255,80,240,255},{60,255,180,200},{255,40,220,255},{180,20,160,255}},
+    // 18 Storm
+    {{12,15,22,255},{7,9,14,255},{80,110,160,20},{140,180,230,255},{255,140,30,200},{100,150,210,255},{60,90,150,255}},
+    // 19 Bronze
+    {{28,18,6,255},{18,11,3,255},{160,100,30,20},{220,160,60,255},{60,180,255,200},{200,140,40,255},{140,90,20,255}},
+    // 20 Crystal
+    {{8,18,30,255},{5,11,20,255},{120,200,255,20},{200,255,255,255},{255,80,100,200},{160,255,240,255},{80,200,220,255}},
 };
-#define NUM_THEMES 12
+#define NUM_THEMES 20
 
 // ── Forward declarations ───────────────────────────────────────────────────────
 void  InitGame(Game *g);
@@ -268,10 +284,10 @@ Rectangle GetMenuBtnRect(int idx) {
 }
 
 Rectangle GetLevelTileRect(int level) {
-    // 4 columns × 3 rows, 1-based
+    // 4 columns × 5 rows, 1-based
     int i = level - 1;
     int col = i % 4, row = i / 4;
-    return (Rectangle){28.0f + col * 108.0f, 145.0f + row * 92.0f, 100.0f, 82.0f};
+    return (Rectangle){58.0f + col * 106.0f, 140.0f + row * 88.0f, 98.0f, 78.0f};
 }
 
 Theme GetThemeForLevel(int level) {
@@ -299,8 +315,15 @@ void DrawStars(const Game *g) {
     float t = (float)GetTime();
     for (int i = 0; i < MAX_STARS; i++) {
         const Star *s = &g->stars[i];
-        float b = 0.25f + 0.6f * (0.5f + 0.5f * sinf(t * s->speed + s->phase));
+        float b = 0.20f + 0.65f * (0.5f + 0.5f * sinf(t * s->speed + s->phase));
         DrawCircleV((Vector2){s->x, s->y}, s->size, Fade(WHITE, b));
+        // Occasional sparkle cross on bright stars
+        if (s->size > 1.6f && b > 0.75f) {
+            float spk = (b - 0.75f) * 4.0f;
+            float sl  = s->size * 2.8f * spk;
+            DrawLineEx((Vector2){s->x - sl, s->y}, (Vector2){s->x + sl, s->y}, 0.8f, Fade(WHITE, spk * 0.6f));
+            DrawLineEx((Vector2){s->x, s->y - sl}, (Vector2){s->x, s->y + sl}, 0.8f, Fade(WHITE, spk * 0.6f));
+        }
     }
 }
 
@@ -483,8 +506,9 @@ void SpawnNewRow(Game *g) {
                 + GetRandomValue(0, globalRound / 3 + 1);
     if (newHP < 1) newHP = 1;
 
-    int bricksInRow = GetRandomValue(3, GRID_COLS - 1);
-    int cols[GRID_COLS] = {0,1,2,3,4,5,6};
+    int bricksInRow = GetRandomValue(2, GRID_COLS - 2);
+    int cols[GRID_COLS];
+    for (int ci = 0; ci < GRID_COLS; ci++) cols[ci] = ci;
     for (int i = GRID_COLS - 1; i > 0; i--) {
         int j = GetRandomValue(0, i);
         int tmp = cols[i]; cols[i] = cols[j]; cols[j] = tmp;
@@ -908,8 +932,8 @@ void UpdateHighscoreView(Game *g) {
 
 // ── Draw: Background ──────────────────────────────────────────────────────────
 void DrawBackground(const Game *g) {
-    // Deep gradient (32 strips for smoothness)
-    int strips = 32;
+    // Deep gradient (48 strips for ultra-smooth blending)
+    int strips = 48;
     for (int i = 0; i < strips; i++) {
         float t0 = (float)i / strips, t1 = (float)(i + 1) / strips;
         Color c0 = BlendColor(g->theme.bgA, g->theme.bgB, t0);
@@ -921,23 +945,48 @@ void DrawBackground(const Game *g) {
     // Stars
     DrawStars(g);
 
-    // Nebula blobs (large soft circles)
+    // Nebula blobs — 6 large soft circles for depth
     float t = (float)GetTime();
-    Color nebA = g->theme.accentA; nebA.a = 12;
-    Color nebB = g->theme.accentB; nebB.a = 8;
-    DrawCircleV((Vector2){70.0f + sinf(t * 0.15f) * 20.0f, 200.0f}, 140.0f, nebA);
-    DrawCircleV((Vector2){410.0f + cosf(t * 0.12f) * 20.0f, 480.0f}, 120.0f, nebB);
-    DrawCircleV((Vector2){240.0f, 350.0f + sinf(t * 0.10f) * 15.0f}, 100.0f, nebA);
+    Color nebA = g->theme.accentA; nebA.a = 14;
+    Color nebB = g->theme.accentB; nebB.a = 10;
+    Color nebC = g->theme.accentA; nebC.a = 7;
+    DrawCircleV((Vector2){75.0f  + sinf(t * 0.13f) * 22.0f, 180.0f + cosf(t * 0.09f) * 12.0f}, 160.0f, nebA);
+    DrawCircleV((Vector2){465.0f + cosf(t * 0.11f) * 22.0f, 500.0f + sinf(t * 0.08f) * 14.0f}, 145.0f, nebB);
+    DrawCircleV((Vector2){270.0f + sinf(t * 0.07f) * 18.0f, 360.0f}, 125.0f, nebC);
+    DrawCircleV((Vector2){400.0f + cosf(t * 0.16f) * 16.0f, 160.0f}, 90.0f, nebB);
+    DrawCircleV((Vector2){120.0f, 540.0f + sinf(t * 0.12f) * 18.0f}, 100.0f, nebA);
+    DrawCircleV((Vector2){470.0f + sinf(t * 0.09f) * 14.0f, 320.0f}, 80.0f, nebC);
+
+    // Shooting stars — 4 periodic streaks
+    for (int si = 0; si < 4; si++) {
+        float cycle    = 9.0f + si * 4.3f;
+        float offset   = si * 2.7f;
+        float progress = fmodf(t * 0.35f + offset, cycle) / cycle;
+        if (progress > 0.12f) continue;
+        float streak = progress / 0.12f;
+        float sx = fmodf(80.0f + si * 147.5f + t * 5.0f, (float)SCREEN_W + 80.0f) - 40.0f;
+        float sy = 30.0f + si * 65.0f;
+        float len = (1.0f - streak) * 70.0f;
+        float alpha = (1.0f - streak) * 0.75f;
+        DrawLineEx((Vector2){sx, sy}, (Vector2){sx + len * 0.85f, sy + len * 0.28f}, 2.2f, Fade(WHITE, alpha));
+        DrawLineEx((Vector2){sx, sy}, (Vector2){sx + len * 0.5f,  sy + len * 0.16f}, 1.0f, Fade(WHITE, alpha * 0.4f));
+    }
+
+    // Subtle grid-area floor glow
+    float gridBottom = GRID_OFFSET_Y + GRID_ROWS * CELL_SIZE;
+    DrawRectangleGradientV(
+        (int)GRID_OFFSET_X, (int)(gridBottom - 18), (int)(GRID_COLS * CELL_SIZE), 18,
+        (Color){0,0,0,0}, (Color){g->theme.dangerLine.r, g->theme.dangerLine.g, g->theme.dangerLine.b, 22});
 
     // Vignette
-    DrawRectangleGradientH(0, 0, 70, SCREEN_H, (Color){0,0,0,90}, (Color){0,0,0,0});
-    DrawRectangleGradientH(SCREEN_W-70, 0, 70, SCREEN_H, (Color){0,0,0,0}, (Color){0,0,0,90});
-    DrawRectangleGradientV(0, 0, SCREEN_W, 60, (Color){0,0,0,60}, (Color){0,0,0,0});
-    DrawRectangleGradientV(0, SCREEN_H-60, SCREEN_W, 60, (Color){0,0,0,0}, (Color){0,0,0,80});
+    DrawRectangleGradientH(0, 0, 75, SCREEN_H, (Color){0,0,0,100}, (Color){0,0,0,0});
+    DrawRectangleGradientH(SCREEN_W-75, 0, 75, SCREEN_H, (Color){0,0,0,0}, (Color){0,0,0,100});
+    DrawRectangleGradientV(0, 0, SCREEN_W, 65, (Color){0,0,0,70}, (Color){0,0,0,0});
+    DrawRectangleGradientV(0, SCREEN_H-65, SCREEN_W, 65, (Color){0,0,0,0}, (Color){0,0,0,90});
 
     // Subtle scanlines
     for (int y = 0; y < SCREEN_H; y += 4)
-        DrawRectangle(0, y, SCREEN_W, 1, (Color){0,0,0,10});
+        DrawRectangle(0, y, SCREEN_W, 1, (Color){0,0,0,9});
 }
 
 // ── Draw: Menu Button ─────────────────────────────────────────────────────────
@@ -971,36 +1020,51 @@ void DrawMenuButton(const char *label, Rectangle r, bool hovered, bool primary, 
 
 // ── Draw: HUD ─────────────────────────────────────────────────────────────────
 void DrawHUD(const Game *g) {
-    // Glass top bar
-    DrawRectangleGradientV(0, 0, SCREEN_W, (int)HUD_HEIGHT, (Color){0,0,0,170}, (Color){0,0,0,80});
-    DrawLine(0, (int)HUD_HEIGHT, SCREEN_W, (int)HUD_HEIGHT, (Color){255,255,255,20});
-    // Subtle bottom accent line
-    Color ac = g->theme.accentA; ac.a = 60;
+    // Glass top bar — gradient + frosted edge
+    DrawRectangleGradientV(0, 0, SCREEN_W, (int)HUD_HEIGHT, (Color){0,0,0,185}, (Color){0,0,0,75});
+    // Subtle inner top highlight (glass rim)
+    DrawRectangle(0, 0, SCREEN_W, 1, (Color){255,255,255,18});
+    // Accent bottom line
+    Color ac = g->theme.accentA; ac.a = 55;
     DrawLine(0, (int)HUD_HEIGHT, SCREEN_W, (int)HUD_HEIGHT, ac);
+    DrawLine(0, (int)HUD_HEIGHT+1, SCREEN_W, (int)HUD_HEIGHT+1, (Color){255,255,255,12});
 
+    // Level + round label
     char buf[64];
-    int globalRound = (g->level - 1) * ROUNDS_PER_LEVEL + g->round - 1;
-    sprintf(buf, "LV%d  R%d", g->level, globalRound > 0 ? globalRound : 1);
-    DrawText(buf, 10, 15, 18, (Color){180,200,240,255});
+    int roundInLevel = g->round > 0 ? g->round - 1 : 0;
+    sprintf(buf, "LV %d", g->level);
+    DrawText(buf, 10, 8, 16, Fade(g->theme.accentA, 0.90f));
+    sprintf(buf, "R %d/%d", roundInLevel > 0 ? roundInLevel : 1, ROUNDS_PER_LEVEL);
+    DrawText(buf, 10, 27, 13, (Color){150,170,210,200});
 
+    // Centered score
     sprintf(buf, "%d", g->score);
-    int sw = MeasureText(buf, 24);
-    DrawText(buf, (SCREEN_W-sw)/2 + 1, 13, 24, Fade(BLACK, 0.5f));
-    DrawText(buf, (SCREEN_W-sw)/2, 12, 24, WHITE);
+    int sw = MeasureText(buf, 26);
+    DrawText(buf, (SCREEN_W-sw)/2 + 1, 11, 26, Fade(BLACK, 0.55f));
+    DrawText(buf, (SCREEN_W-sw)/2, 10, 26, WHITE);
+
+    // Round progress bar (thin, below score)
+    float rProg = (float)(roundInLevel > 0 ? roundInLevel : 1) / ROUNDS_PER_LEVEL;
+    if (rProg > 1.0f) rProg = 1.0f;
+    int barX = (SCREEN_W - 90) / 2, barY = 38, barW = 90, barH = 3;
+    DrawRectangle(barX, barY, barW, barH, (Color){0,0,0,80});
+    Color progCol = g->theme.accentA; progCol.a = 200;
+    DrawRectangle(barX, barY, (int)(barW * rProg), barH, progCol);
+    DrawRectangle(barX, barY, (int)(barW * rProg), 1, Fade(WHITE, 0.35f));
 
     // Ball count with mini circles
     sprintf(buf, "x%d", g->ballCount);
     int bw = MeasureText(buf, 18);
-    DrawText(buf, SCREEN_W - bw - 10, 15, 18, WHITE);
-    int show = g->ballCount < 5 ? g->ballCount : 5;
+    DrawText(buf, SCREEN_W - bw - 10, 8, 18, WHITE);
+    int show = g->ballCount < 6 ? g->ballCount : 6;
     for (int i = 0; i < show; i++) {
-        Vector2 bp = {(float)(SCREEN_W - bw - 24 - i * 13), 24.0f};
-        DrawCircleV(bp, 4.5f, Fade(g->theme.ballGlow, 0.85f));
-        DrawCircleV(bp, 2.5f, WHITE);
+        Vector2 bp = {(float)(SCREEN_W - bw - 26 - i * 12), 27.0f};
+        DrawCircleV(bp, 4.0f, Fade(g->theme.ballGlow, 0.80f));
+        DrawCircleV(bp, 2.0f, WHITE);
     }
 
     const char *sm = g->soundEnabled ? "[M]" : "[M]OFF";
-    DrawText(sm, 4, SCREEN_H - 18, 12, (Color){110,110,140,180});
+    DrawText(sm, 4, SCREEN_H - 18, 12, (Color){110,110,140,170});
 }
 
 // ── Draw: Bricks ──────────────────────────────────────────────────────────────
@@ -1016,40 +1080,68 @@ void DrawBricks(const Game *g) {
             CELL_SIZE - 8, CELL_SIZE - 8
         };
 
-        Color col = (b->flashTimer > 0.0f) ? WHITE : b->color;
+        bool flashing = (b->flashTimer > 0.0f);
+        Color col = flashing ? WHITE : b->color;
+        float hpRatio = (b->maxHp > 1) ? (float)b->hp / b->maxHp : 1.0f;
 
-        // Drop shadow
-        DrawRectangleRounded((Rectangle){base.x+3, base.y+4, base.width, base.height},
-                             0.22f, 6, (Color){0,0,0,100});
+        // Drop shadow (deeper)
+        DrawRectangleRounded((Rectangle){base.x+3, base.y+5, base.width, base.height},
+                             0.22f, 6, (Color){0,0,0,120});
+        // Outer subtle glow ring when brick is nearly full health
+        if (!flashing && hpRatio > 0.7f) {
+            Color glowRing = col; glowRing.a = 18;
+            DrawRectangleRoundedLines((Rectangle){base.x-3, base.y-3, base.width+6, base.height+6}, 0.22f, 6, glowRing);
+        }
+
         // Main body
         DrawRectangleRounded(base, 0.22f, 6, col);
 
-        // Inner gradient: slightly lighter top half
+        // Inner gradient: lighter top → dark bottom (metallic depth)
         Color topTint = col;
-        topTint.r = (unsigned char)fminf(255, col.r + 40);
-        topTint.g = (unsigned char)fminf(255, col.g + 40);
-        topTint.b = (unsigned char)fminf(255, col.b + 40);
+        topTint.r = (unsigned char)fminf(255, col.r + 55);
+        topTint.g = (unsigned char)fminf(255, col.g + 55);
+        topTint.b = (unsigned char)fminf(255, col.b + 55);
         DrawRectangleGradientV(
             (int)(base.x + 2), (int)(base.y + 2),
-            (int)(base.width - 4), (int)((base.height - 4) * 0.5f),
-            Fade(topTint, 0.35f), Fade(topTint, 0.0f));
+            (int)(base.width - 4), (int)((base.height - 4) * 0.55f),
+            Fade(topTint, 0.40f), Fade(topTint, 0.0f));
 
-        // Glass highlight (top-left strip)
+        // Inner bottom shadow for depth
+        DrawRectangleGradientV(
+            (int)(base.x + 2), (int)(base.y + base.height * 0.65f),
+            (int)(base.width - 4), (int)(base.height * 0.30f),
+            Fade(BLACK, 0.0f), Fade(BLACK, 0.22f));
+
+        // Glass highlight — wide top strip + small glint dot
         DrawRectangleRounded(
             (Rectangle){base.x+2, base.y+2, base.width-4, (base.height-4)*0.30f},
-            0.22f, 4, Fade(WHITE, 0.20f));
+            0.22f, 4, Fade(WHITE, 0.24f));
+        DrawCircleV((Vector2){base.x + 8.0f, base.y + 6.0f}, 3.0f, Fade(WHITE, 0.35f));
 
-        // Glowing border
-        Color borderGlow = col; borderGlow.a = (b->flashTimer > 0.0f) ? 255 : 180;
-        DrawRectangleRoundedLines(base, 0.22f, 6, Fade(borderGlow, 0.7f));
+        // Glowing border (brighter on flash)
+        Color borderGlow = col; borderGlow.a = flashing ? 255 : 200;
+        DrawRectangleRoundedLines(base, 0.22f, 6, Fade(borderGlow, flashing ? 1.0f : 0.75f));
+
+        // Crack overlay at low HP (< 30%)
+        if (!flashing && hpRatio < 0.30f && b->maxHp > 1) {
+            float cx = base.x + base.width  * 0.5f;
+            float cy = base.y + base.height * 0.5f;
+            Color crk = (Color){0,0,0,120};
+            DrawLineEx((Vector2){cx - 10, cy - 12}, (Vector2){cx + 4,  cy + 6},  1.5f, crk);
+            DrawLineEx((Vector2){cx + 4,  cy + 6},  (Vector2){cx + 12, cy + 14}, 1.5f, crk);
+            DrawLineEx((Vector2){cx - 4,  cy + 2},  (Vector2){cx - 12, cy + 14}, 1.5f, crk);
+            DrawLineEx((Vector2){cx + 8,  cy - 10}, (Vector2){cx - 2,  cy + 4},  1.2f, crk);
+        }
 
         // HP bar
         if (b->maxHp > 1) {
-            float ratio = (float)b->hp / b->maxHp;
+            float ratio = hpRatio;
             float barW  = (base.width - 8) * ratio;
-            DrawRectangle((int)(base.x+4), (int)(base.y + base.height - 6), (int)(base.width-8), 3, (Color){0,0,0,120});
-            Color barCol = (ratio > 0.5f) ? (Color){80,255,100,220} : (ratio > 0.25f) ? (Color){255,200,40,220} : (Color){255,70,70,220};
-            DrawRectangle((int)(base.x+4), (int)(base.y + base.height - 6), (int)barW, 3, barCol);
+            DrawRectangle((int)(base.x+4), (int)(base.y + base.height - 7), (int)(base.width-8), 4, (Color){0,0,0,130});
+            Color barCol = (ratio > 0.5f) ? (Color){60,245,90,230} : (ratio > 0.25f) ? (Color){255,195,35,230} : (Color){255,55,55,230};
+            DrawRectangle((int)(base.x+4), (int)(base.y + base.height - 7), (int)barW, 4, barCol);
+            // Bar highlight
+            DrawRectangle((int)(base.x+4), (int)(base.y + base.height - 7), (int)barW, 1, Fade(WHITE, 0.35f));
         }
 
         // HP text
@@ -1058,22 +1150,25 @@ void DrawBricks(const Game *g) {
         int fs = (b->hp >= 10000) ? 11 : (b->hp >= 1000) ? 13 : (b->hp >= 100) ? 15 : (b->hp >= 10) ? 18 : 22;
         int tw = MeasureText(hpBuf, fs);
         int tx = (int)(base.x + base.width/2 - tw/2);
-        int ty = (int)(base.y + base.height/2 - fs/2 - 2);
-        DrawText(hpBuf, tx+1, ty+1, fs, (Color){0,0,0,180});
+        int ty = (int)(base.y + base.height/2 - fs/2 - 3);
+        DrawText(hpBuf, tx+1, ty+2, fs, (Color){0,0,0,200});
         DrawText(hpBuf, tx, ty, fs, WHITE);
 
-        // Explosive indicator — pulsing orange border + corner "!"
+        // Explosive indicator — pulsing orange border + corner "!" + inner glow
         if (b->explosive) {
             float pulse = 0.5f + 0.5f * sinf((float)GetTime() * 6.0f + b->col * 1.3f);
             Color expCol = (Color){255, 110, 20, 255};
+            // Inner warm glow
+            Color innerGlow = (Color){255, 80, 0, (unsigned char)(18 + pulse * 18)};
+            DrawRectangleRounded(base, 0.22f, 6, innerGlow);
             DrawRectangleRoundedLines(
                 (Rectangle){base.x-2, base.y-2, base.width+4, base.height+4},
-                0.22f, 6, Fade(expCol, 0.45f + pulse * 0.40f));
+                0.22f, 6, Fade(expCol, 0.50f + pulse * 0.40f));
             DrawRectangleRoundedLines(
                 (Rectangle){base.x-5, base.y-5, base.width+10, base.height+10},
-                0.22f, 6, Fade(expCol, 0.12f + pulse * 0.12f));
+                0.22f, 6, Fade(expCol, 0.14f + pulse * 0.14f));
             DrawText("!", (int)(base.x + base.width - 11), (int)(base.y + 3), 13,
-                     Fade(expCol, 0.85f + pulse * 0.15f));
+                     Fade(expCol, 0.88f + pulse * 0.12f));
         }
     }
 }
@@ -1084,22 +1179,40 @@ void DrawPickups(const Game *g) {
         const BallPickup *p = &g->pickups[i];
         if (!p->active) continue;
         Vector2 center = GetCellCenter(p->col, p->row);
-        float pulse = sinf((float)GetTime() * 4.5f + p->pulseT);
+        float t     = (float)GetTime();
+        float pulse = sinf(t * 4.5f + p->pulseT);
         float r     = CELL_SIZE * 0.20f + pulse * 2.5f;
+        float rot   = t * 45.0f + p->pulseT * 20.0f;  // slow rotation
 
-        // Glow layers
-        DrawCircleV(center, r + 14, Fade((Color){255,220,30,255}, 0.04f));
-        DrawCircleV(center, r + 9,  Fade((Color){255,220,30,255}, 0.08f));
-        DrawCircleV(center, r + 5,  Fade((Color){255,220,30,255}, 0.16f));
-        // Orb body
-        DrawCircleV(center, r, (Color){255,220,30,255});
-        // Shine gradient
-        DrawCircleV((Vector2){center.x - r*0.25f, center.y - r*0.25f}, r*0.35f, Fade(WHITE, 0.55f));
+        Color gold = (Color){255,215,25,255};
+
+        // Wide outer glow rings
+        DrawCircleV(center, r + 18, Fade(gold, 0.03f));
+        DrawCircleV(center, r + 12, Fade(gold, 0.07f));
+        DrawCircleV(center, r +  7, Fade(gold, 0.15f));
+        DrawCircleV(center, r +  3, Fade(gold, 0.28f));
+
+        // Orb body with gradient
+        DrawCircleV(center, r, gold);
+        DrawCircleGradient((int)center.x, (int)center.y, r,
+                           Fade(WHITE, 0.30f), Fade(gold, 0.0f));
+
+        // Diamond shape overlay (rotated square)
+        float ds = r * 0.80f;
+        DrawRectanglePro(
+            (Rectangle){center.x, center.y, ds * 1.4f, ds * 1.4f},
+            (Vector2){ds * 0.7f, ds * 0.7f},
+            rot, Fade(WHITE, 0.08f));
+
+        // Shine glint
+        DrawCircleV((Vector2){center.x - r*0.28f, center.y - r*0.28f}, r*0.30f, Fade(WHITE, 0.60f));
+        DrawCircleV((Vector2){center.x - r*0.18f, center.y - r*0.18f}, r*0.14f, WHITE);
+
         // "+1" label
         const char *plus = "+1";
-        int tw = MeasureText(plus, 14);
-        DrawText(plus, (int)center.x - tw/2 + 1, (int)center.y - 7 + 1, 14, Fade(BLACK, 0.5f));
-        DrawText(plus, (int)center.x - tw/2, (int)center.y - 7, 14, (Color){30,20,0,255});
+        int tw = MeasureText(plus, 13);
+        DrawText(plus, (int)center.x - tw/2 + 1, (int)center.y - 7 + 1, 13, Fade(BLACK, 0.6f));
+        DrawText(plus, (int)center.x - tw/2, (int)center.y - 7, 13, (Color){30,20,0,255});
     }
 }
 
@@ -1135,60 +1248,88 @@ void DrawBalls(const Game *g) {
         const Ball *b = &g->balls[bi];
         if (!b->active) continue;
 
-        // Trail
+        // Trail — tapered with color tint from theme
         for (int t = 0; t < b->trail.count; t++) {
             int idx  = (b->trail.head - 1 - t + TRAIL_LEN) % TRAIL_LEN;
             float tf = 1.0f - (float)(t + 1) / (TRAIL_LEN + 1);
-            float tr = BALL_RADIUS * tf * 0.70f;
+            float tr = BALL_RADIUS * tf * 0.75f;
             Color tc = g->theme.ballGlow;
-            tc.a = (unsigned char)(tf * tf * 130.0f);
+            tc.a = (unsigned char)(tf * tf * 150.0f);
             DrawCircleV(b->trail.pos[idx], tr, tc);
+            // Inner white core of trail
+            Color tc2 = WHITE;
+            tc2.a = (unsigned char)(tf * tf * 55.0f);
+            DrawCircleV(b->trail.pos[idx], tr * 0.45f, tc2);
         }
 
-        // Glow halo
-        Color go = g->theme.ballGlow; go.a = 28;
-        Color gi = g->theme.ballGlow; gi.a = 55;
-        DrawCircleV(b->position, BALL_RADIUS + 7.0f, go);
-        DrawCircleV(b->position, BALL_RADIUS + 3.5f, gi);
-        // Ball body
-        DrawCircleV(b->position, BALL_RADIUS, WHITE);
-        // Glint
-        DrawCircleV((Vector2){b->position.x - 2.8f, b->position.y - 2.8f}, 3.0f, Fade(WHITE, 0.80f));
-        DrawCircleV((Vector2){b->position.x - 2.0f, b->position.y - 2.0f}, 1.4f, WHITE);
+        // Chromatic aberration glow (red offset left, blue offset right)
+        DrawCircleV((Vector2){b->position.x - 2.2f, b->position.y}, BALL_RADIUS + 2.0f, (Color){255,60,60,22});
+        DrawCircleV((Vector2){b->position.x + 2.2f, b->position.y}, BALL_RADIUS + 2.0f, (Color){60,130,255,22});
+
+        // Wide outer glow halo
+        Color go = g->theme.ballGlow; go.a = 20;
+        Color gm = g->theme.ballGlow; gm.a = 42;
+        Color gi = g->theme.ballGlow; gi.a = 70;
+        DrawCircleV(b->position, BALL_RADIUS + 11.0f, go);
+        DrawCircleV(b->position, BALL_RADIUS +  5.5f, gm);
+        DrawCircleV(b->position, BALL_RADIUS +  2.5f, gi);
+
+        // Ball body — slightly off-white for premium feel
+        DrawCircleV(b->position, BALL_RADIUS, (Color){245, 248, 255, 255});
+        // Bottom shadow on ball
+        DrawCircleV((Vector2){b->position.x + 1.5f, b->position.y + 2.5f}, BALL_RADIUS * 0.65f,
+                    (Color){160,170,200,40});
+        // Glint (large soft + sharp point)
+        DrawCircleV((Vector2){b->position.x - 3.2f, b->position.y - 3.2f}, 3.5f, Fade(WHITE, 0.75f));
+        DrawCircleV((Vector2){b->position.x - 2.2f, b->position.y - 2.2f}, 1.5f, WHITE);
     }
 }
 
 // ── Draw: Launcher ────────────────────────────────────────────────────────────
 void DrawLauncher(const Game *g) {
     float px = g->launcherX, py = LAUNCHER_Y;
-    float pulse = sinf(g->launcherPulse) * 0.5f + 0.5f;
+    float pulse  = sinf(g->launcherPulse) * 0.5f + 0.5f;
+    float pulse2 = sinf(g->launcherPulse * 1.7f + 1.0f) * 0.5f + 0.5f;
     Color rc = g->theme.ballGlow;
 
-    // Outer rings
-    DrawCircleLines((int)px, (int)py, 22.0f + pulse * 8.0f, Fade(rc, 0.10f + pulse * 0.08f));
-    DrawCircleLines((int)px, (int)py, 16.0f, Fade(rc, 0.22f));
-    DrawCircleLines((int)px, (int)py, 12.0f, Fade(rc, 0.14f));
+    // Floor glow beneath launcher
+    DrawCircleV((Vector2){px, py + 6.0f}, 28.0f + pulse * 6.0f, (Color){rc.r, rc.g, rc.b, (unsigned char)(8 + pulse * 10)});
 
-    // Aim arrow
+    // Outer expanding ring
+    DrawCircleLines((int)px, (int)py, 34.0f + pulse * 10.0f, Fade(rc, 0.06f + pulse * 0.06f));
+    // Mid rings
+    DrawCircleLines((int)px, (int)py, 24.0f + pulse2 * 5.0f, Fade(rc, 0.13f + pulse2 * 0.08f));
+    DrawCircleLines((int)px, (int)py, 17.0f, Fade(rc, 0.28f));
+    DrawCircleLines((int)px, (int)py, 12.5f, Fade(rc, 0.18f));
+    DrawCircleLines((int)px, (int)py,  8.5f, Fade(rc, 0.30f));
+
+    // Aim arrow with shadow
     if (!g->roundActive) {
-        Vector2 tip  = {px + g->aimDir.x * 26.0f, py + g->aimDir.y * 26.0f};
+        Vector2 tip  = {px + g->aimDir.x * 28.0f, py + g->aimDir.y * 28.0f};
         Vector2 perp = {-g->aimDir.y, g->aimDir.x};
-        Vector2 lft  = {px + perp.x * 8.0f, py + perp.y * 8.0f};
-        Vector2 rgt  = {px - perp.x * 8.0f, py - perp.y * 8.0f};
+        Vector2 lft  = {px + perp.x * 9.0f, py + perp.y * 9.0f};
+        Vector2 rgt  = {px - perp.x * 9.0f, py - perp.y * 9.0f};
+        // Shadow
+        DrawTriangle((Vector2){tip.x+1, tip.y+2}, (Vector2){lft.x+1, lft.y+2}, (Vector2){rgt.x+1, rgt.y+2},
+                     (Color){0,0,0,80});
         DrawTriangle(tip, lft, rgt, rc);
-        DrawTriangleLines(tip, lft, rgt, Fade(WHITE, 0.45f));
+        DrawTriangleLines(tip, lft, rgt, Fade(WHITE, 0.50f));
     }
 
-    // Core circle
+    // Core — layered for 3D feel
+    DrawCircleV((Vector2){px, py}, 9.5f, Fade(rc, 0.45f));
     DrawCircleV((Vector2){px, py}, 8.0f, WHITE);
-    DrawCircleV((Vector2){px, py}, 5.0f, rc);
-    DrawCircleV((Vector2){px - 2.0f, py - 2.0f}, 1.8f, WHITE);
+    DrawCircleV((Vector2){px, py}, 5.5f, rc);
+    // Highlight
+    DrawCircleV((Vector2){px - 2.2f, py - 2.2f}, 2.2f, Fade(WHITE, 0.90f));
+    DrawCircleV((Vector2){px - 1.5f, py - 1.5f}, 1.0f, WHITE);
 
     // Ball count below launcher
     char cntBuf[16];
     sprintf(cntBuf, "x%d", g->ballCount);
     int tw = MeasureText(cntBuf, 15);
-    DrawText(cntBuf, (int)(px - tw/2), (int)(py + 13), 15, Fade(WHITE, 0.70f));
+    DrawText(cntBuf, (int)(px - tw/2) + 1, (int)(py + 14), 15, Fade(BLACK, 0.55f));
+    DrawText(cntBuf, (int)(px - tw/2),     (int)(py + 13), 15, Fade(WHITE, 0.75f));
 }
 
 // ── Draw: Particles ───────────────────────────────────────────────────────────
@@ -1390,7 +1531,7 @@ void DrawLevelSelect(const Game *g) {
         Rectangle tile = GetLevelTileRect(lv);
         bool locked  = (lv > g->unlockedLevels);
         bool hovered = (g->lvSelHover == lv);
-        Theme th     = THEMES[lv - 1]; // exact 1:1 since NUM_THEMES=12
+        Theme th     = THEMES[lv - 1]; // exact 1:1 since NUM_THEMES=20
 
         // Tile background
         Color tileBg;
@@ -1650,7 +1791,7 @@ void DrawHighscoreView(const Game *g) {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 int main(void) {
-    InitWindow(SCREEN_W, SCREEN_H, "Brick Breaker Hit");
+    InitWindow(SCREEN_W, SCREEN_H, "Brick Breaker Hit  v4");
     SetTargetFPS(60);
     InitAudioDevice();
 
