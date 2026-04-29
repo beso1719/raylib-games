@@ -45,6 +45,7 @@ typedef enum {
     STATE_MENU,
     STATE_LEVEL_SELECT,
     STATE_PLAYING,
+    STATE_PAUSED,
     STATE_LEVEL_UP,
     STATE_GAME_OVER,
     STATE_HIGHSCORE_ENTRY,
@@ -62,6 +63,7 @@ typedef struct {
 typedef struct {
     int   hp, maxHp;
     bool  active;
+    bool  explosive;    // explodes on death — damages 4 neighbours
     int   col, row;
     Color color;
     float flashTimer, shakeX;
@@ -130,6 +132,10 @@ typedef struct {
 
     Theme  theme, nextTheme;
     float  themeFadeT;
+
+    // Round combo
+    int    roundCombo;
+    float  comboDisplayTimer;
 } Game;
 
 // ── Level themes (12 unique) ──────────────────────────────────────────────────
@@ -174,11 +180,13 @@ void  PlaySfx(const Game *g, Sound snd);
 void  SpawnBrickParticles(Game *g, int col, int row, Color c);
 void  SpawnMenuOrb(Game *g);
 void  UpdateParticles(Game *g, float dt);
+void  ExplodeBrick(Game *g, int col, int row);
 void  InitStars(Game *g);
 
 void UpdateMenu(Game *g, float dt);
 void UpdateLevelSelect(Game *g, float dt);
 void UpdatePlaying(Game *g, float dt);
+void UpdatePaused(Game *g);
 void UpdateLevelUp(Game *g, float dt);
 void UpdateGameOver(Game *g);
 void UpdateHighscoreEntry(Game *g);
@@ -193,6 +201,7 @@ void DrawStars(const Game *g);
 void DrawMenu(const Game *g);
 void DrawLevelSelect(const Game *g);
 void DrawPlaying(const Game *g);
+void DrawPaused(const Game *g);
 void DrawHUD(const Game *g);
 void DrawBricks(const Game *g);
 void DrawBalls(const Game *g);
@@ -372,6 +381,35 @@ void UpdateParticles(Game *g, float dt) {
     }
 }
 
+// ── Explosive brick — damages 4 neighbours, chains if they're also explosive ───
+void ExplodeBrick(Game *g, int col, int row) {
+    const int dx[] = {-1, 1, 0, 0};
+    const int dy[] = {0, 0, -1, 1};
+    for (int d = 0; d < 4; d++) {
+        int nc = col + dx[d], nr = row + dy[d];
+        if (nc < 0 || nc >= GRID_COLS || nr < 0 || nr >= GRID_ROWS) continue;
+        for (int i = 0; i < MAX_BRICKS; i++) {
+            Brick *b = &g->bricks[i];
+            if (!b->active || b->col != nc || b->row != nr) continue;
+            b->hp--;
+            b->flashTimer = 0.12f;
+            b->shakeX     = 6.0f;
+            if (b->hp <= 0) {
+                bool wasExp = b->explosive;
+                int  bc = b->col, br2 = b->row;
+                Color bCol = b->color;
+                b->active = false;          // deactivate BEFORE recursing
+                g->score += SCORE_PER_BRICK;
+                g->roundCombo++;
+                g->comboDisplayTimer = 1.8f;
+                SpawnBrickParticles(g, bc, br2, bCol);
+                if (wasExp) ExplodeBrick(g, bc, br2);
+            }
+            break;
+        }
+    }
+}
+
 // ── Highscores / Save ─────────────────────────────────────────────────────────
 void LoadSaveData(Game *g) {
     SaveData sd = {0};
@@ -467,6 +505,7 @@ void SpawnNewRow(Game *g) {
                 g->bricks[s].color      = GetBrickColor(hp, g->level);
                 g->bricks[s].flashTimer = 0.0f;
                 g->bricks[s].shakeX     = 0.0f;
+                g->bricks[s].explosive  = (GetRandomValue(0, 4) == 0); // 20% chance
                 break;
             }
         }
@@ -660,10 +699,16 @@ void UpdateBallPhysics(Game *g, float dt) {
             br->shakeX     = 3.0f;
 
             if (br->hp <= 0) {
-                SpawnBrickParticles(g, br->col, br->row, br->color);
+                bool wasExplosive = br->explosive;
+                int  bCol = br->col, bRow = br->row;
+                Color bColor = br->color;
+                SpawnBrickParticles(g, bCol, bRow, bColor);
                 br->active = false;
                 g->score  += SCORE_PER_BRICK;
+                g->roundCombo++;
+                g->comboDisplayTimer = 1.8f;
                 PlaySfx(g, g->sndDestroy);
+                if (wasExplosive) ExplodeBrick(g, bCol, bRow);
             } else {
                 PlaySfx(g, g->sndHit);
             }
@@ -762,10 +807,24 @@ void UpdateLevelSelect(Game *g, float dt) {
     if (IsKeyPressed(KEY_M)) g->soundEnabled = !g->soundEnabled;
 }
 
+// ── Update: Paused ────────────────────────────────────────────────────────────
+void UpdatePaused(Game *g) {
+    if (IsKeyPressed(KEY_P) || IsKeyPressed(KEY_ESCAPE)) g->state = STATE_PLAYING;
+    if (IsKeyPressed(KEY_Q)) g->state = STATE_MENU;
+    if (IsKeyPressed(KEY_M)) g->soundEnabled = !g->soundEnabled;
+}
+
 // ── Update: Playing ───────────────────────────────────────────────────────────
 void UpdatePlaying(Game *g, float dt) {
+    if (IsKeyPressed(KEY_P) || IsKeyPressed(KEY_ESCAPE)) {
+        g->state = STATE_PAUSED;
+        return;
+    }
+
     g->launcherPulse += dt * 3.0f;
     UpdateParticles(g, dt);
+
+    if (g->comboDisplayTimer > 0.0f) g->comboDisplayTimer -= dt;
 
     if (IsKeyPressed(KEY_M)) g->soundEnabled = !g->soundEnabled;
 
@@ -780,6 +839,7 @@ void UpdatePlaying(Game *g, float dt) {
                 g->returnedBallCount = 0;
                 g->firstReturned     = false;
                 g->launchTimer       = 0.0f;
+                g->roundCombo        = 0;
                 for (int i = 0; i < BALL_POOL_SIZE; i++) { g->balls[i].active = false; g->balls[i].returned = false; }
             }
         }
@@ -1001,6 +1061,20 @@ void DrawBricks(const Game *g) {
         int ty = (int)(base.y + base.height/2 - fs/2 - 2);
         DrawText(hpBuf, tx+1, ty+1, fs, (Color){0,0,0,180});
         DrawText(hpBuf, tx, ty, fs, WHITE);
+
+        // Explosive indicator — pulsing orange border + corner "!"
+        if (b->explosive) {
+            float pulse = 0.5f + 0.5f * sinf((float)GetTime() * 6.0f + b->col * 1.3f);
+            Color expCol = (Color){255, 110, 20, 255};
+            DrawRectangleRoundedLines(
+                (Rectangle){base.x-2, base.y-2, base.width+4, base.height+4},
+                0.22f, 6, Fade(expCol, 0.45f + pulse * 0.40f));
+            DrawRectangleRoundedLines(
+                (Rectangle){base.x-5, base.y-5, base.width+10, base.height+10},
+                0.22f, 6, Fade(expCol, 0.12f + pulse * 0.12f));
+            DrawText("!", (int)(base.x + base.width - 11), (int)(base.y + 3), 13,
+                     Fade(expCol, 0.85f + pulse * 0.15f));
+        }
     }
 }
 
@@ -1174,11 +1248,47 @@ void DrawPlaying(const Game *g) {
     DrawLauncher(g);
     DrawHUD(g);
 
+    // Round combo display
+    if (g->comboDisplayTimer > 0.0f && g->roundCombo >= 3) {
+        float alpha = fminf(g->comboDisplayTimer / 0.5f, 1.0f);
+        char cBuf[32];
+        if (g->roundCombo >= 10)
+            sprintf(cBuf, "MEGA COMBO x%d!", g->roundCombo);
+        else
+            sprintf(cBuf, "COMBO x%d", g->roundCombo);
+        int cw = MeasureText(cBuf, 26);
+        Color cCol = ColorFromHSV(fmodf((float)GetTime() * 90.0f, 360.0f), 0.9f, 1.0f);
+        DrawText(cBuf, (SCREEN_W - cw)/2 + 2, SCREEN_H/2 - 44, 26, Fade(BLACK, 0.65f * alpha));
+        DrawText(cBuf, (SCREEN_W - cw)/2,     SCREEN_H/2 - 46, 26, Fade(cCol, alpha));
+    }
+
     if (!g->roundActive) {
         float alpha = 0.35f + 0.35f * sinf((float)GetTime() * 2.8f);
         const char *hint = "CLICK TO SHOOT";
         int hw = MeasureText(hint, 14);
         DrawText(hint, (SCREEN_W - hw)/2, SCREEN_H - 28, 14, Fade(LIGHTGRAY, alpha));
+    }
+}
+
+// ── Draw: Paused ──────────────────────────────────────────────────────────────
+void DrawPaused(const Game *g) {
+    (void)g;
+    DrawRectangle(0, 0, SCREEN_W, SCREEN_H, Fade(BLACK, 0.58f));
+
+    float hue = fmodf((float)GetTime() * 30.0f, 360.0f);
+    const char *title = "PAUSED";
+    int tw = MeasureText(title, 54);
+    DrawText(title, (SCREEN_W - tw)/2 + 2, 270, 54, Fade(BLACK, 0.70f));
+    DrawText(title, (SCREEN_W - tw)/2,     268, 54, ColorFromHSV(hue, 0.50f, 1.0f));
+
+    struct { const char *text; int y; } items[] = {
+        {"[P] / [ESC]  Resume",  356},
+        {"[Q]  Back to Menu",    396},
+        {"[M]  Toggle Sound",    436},
+    };
+    for (int i = 0; i < 3; i++) {
+        int iw = MeasureText(items[i].text, 19);
+        DrawText(items[i].text, (SCREEN_W - iw)/2, items[i].y, 19, (Color){180,200,240,255});
     }
 }
 
@@ -1554,6 +1664,7 @@ int main(void) {
             case STATE_MENU:            UpdateMenu(g, dt);         break;
             case STATE_LEVEL_SELECT:    UpdateLevelSelect(g, dt);  break;
             case STATE_PLAYING:         UpdatePlaying(g, dt);      break;
+            case STATE_PAUSED:          UpdatePaused(g);           break;
             case STATE_LEVEL_UP:        UpdateLevelUp(g, dt);      break;
             case STATE_GAME_OVER:       UpdateGameOver(g);         break;
             case STATE_HIGHSCORE_ENTRY: UpdateHighscoreEntry(g);   break;
@@ -1562,13 +1673,14 @@ int main(void) {
         BeginDrawing();
         ClearBackground((Color){8, 8, 20, 255});
         switch (g->state) {
-            case STATE_MENU:            DrawMenu(g);            break;
-            case STATE_LEVEL_SELECT:    DrawLevelSelect(g);     break;
-            case STATE_PLAYING:         DrawPlaying(g);         break;
-            case STATE_LEVEL_UP:        DrawLevelUp(g);         break;
-            case STATE_GAME_OVER:       DrawGameOver(g);        break;
-            case STATE_HIGHSCORE_ENTRY: DrawHighscoreEntry(g);  break;
-            case STATE_HIGHSCORE_VIEW:  DrawHighscoreView(g);   break;
+            case STATE_MENU:            DrawMenu(g);                        break;
+            case STATE_LEVEL_SELECT:    DrawLevelSelect(g);                 break;
+            case STATE_PLAYING:         DrawPlaying(g);                     break;
+            case STATE_PAUSED:          DrawPlaying(g); DrawPaused(g);      break;
+            case STATE_LEVEL_UP:        DrawLevelUp(g);                     break;
+            case STATE_GAME_OVER:       DrawGameOver(g);                    break;
+            case STATE_HIGHSCORE_ENTRY: DrawHighscoreEntry(g);              break;
+            case STATE_HIGHSCORE_VIEW:  DrawHighscoreView(g);               break;
         }
         EndDrawing();
     }
