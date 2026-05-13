@@ -419,20 +419,17 @@ void ExplodeBrick(Game *g, int col, int row) {
         for (int i = 0; i < MAX_BRICKS; i++) {
             Brick *b = &g->bricks[i];
             if (!b->active || b->col != nc || b->row != nr) continue;
-            b->hp--;
-            b->flashTimer = 0.12f;
-            b->shakeX     = 6.0f;
-            if (b->hp <= 0) {
-                bool wasExp = b->explosive;
-                int  bc = b->col, br2 = b->row;
-                Color bCol = b->color;
-                b->active = false;          // deactivate BEFORE recursing
-                g->score += SCORE_PER_BRICK;
-                g->roundCombo++;
-                g->comboDisplayTimer = 1.8f;
-                SpawnBrickParticles(g, bc, br2, bCol);
-                if (wasExp) ExplodeBrick(g, bc, br2);
-            }
+            // Explosion destroys neighbour bricks outright (not just -1 HP)
+            bool wasExp = b->explosive;
+            int  bc = b->col, br2 = b->row;
+            Color bCol = b->color;
+            b->hp = 0;
+            b->active = false;            // deactivate BEFORE recursing
+            g->score += SCORE_PER_BRICK;
+            g->roundCombo++;
+            g->comboDisplayTimer = 1.8f;
+            SpawnBrickParticles(g, bc, br2, bCol);
+            if (wasExp) ExplodeBrick(g, bc, br2);
             break;
         }
     }
@@ -534,7 +531,8 @@ void SpawnNewRow(Game *g) {
                 g->bricks[s].color      = GetBrickColor(hp, g->level);
                 g->bricks[s].flashTimer = 0.0f;
                 g->bricks[s].shakeX     = 0.0f;
-                g->bricks[s].explosive  = (GetRandomValue(0, 4) == 0); // 20% chance
+                // Explosive bricks unlock at level 2+ (≈18% chance)
+                g->bricks[s].explosive  = (g->level >= 2) && (GetRandomValue(0, 5) == 0);
                 break;
             }
         }
@@ -566,6 +564,8 @@ void SpawnNewRow(Game *g) {
             g->unlockedLevels = g->level;
             WriteSaveData(g);
         }
+        // Level-up bonus: extra balls to keep up with rising difficulty
+        g->ballCount += 3;
         g->theme        = GetThemeForLevel(g->level);
         g->levelUpTimer = 0.0f;
         g->state        = STATE_LEVEL_UP;
@@ -1693,6 +1693,11 @@ void DrawLevelUp(const Game *g) {
     const char *sub = "KEEP GOING!";
     int sbw = MeasureText(sub, 22);
     DrawText(sub, (SCREEN_W - sbw)/2, 330, 22, Fade(WHITE, alpha * 0.85f));
+
+    const char *bonus = "+3 BALLS";
+    int bbw = MeasureText(bonus, 20);
+    DrawText(bonus, (SCREEN_W - bbw)/2 + 1, 397, 20, Fade(BLACK, alpha * 0.6f));
+    DrawText(bonus, (SCREEN_W - bbw)/2,     396, 20, Fade((Color){255, 215, 60, 255}, alpha));
 
     char scoreBuf[32];
     sprintf(scoreBuf, "Score: %d", g->score);
