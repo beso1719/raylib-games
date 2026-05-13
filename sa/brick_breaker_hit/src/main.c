@@ -127,7 +127,7 @@ typedef struct {
     Shockwave  shockwaves[MAX_SHOCKWAVES];
     Star       stars[MAX_STARS];
 
-    Sound  sndHit, sndDestroy, sndPickup, sndGameOver, sndRoundEnd, sndLevelUp;
+    Sound  sndHit, sndDestroy, sndPickup, sndGameOver, sndRoundEnd, sndLevelUp, sndBoom;
     bool   soundEnabled, audioReady;
 
     Highscore highscores;
@@ -205,6 +205,7 @@ void  WriteSaveData(const Game *g);
 bool  IsNewHighscore(const Highscore *hs, int score);
 void  InsertHighscore(Highscore *hs, const char *name, int score);
 Sound GenerateBeep(float freq, float dur, float vol);
+Sound GenerateBoom(float dur, float vol);
 void  PlaySfx(const Game *g, Sound snd);
 void  SpawnBrickParticles(Game *g, int col, int row, Color c);
 void  SpawnMenuOrb(Game *g);
@@ -360,6 +361,36 @@ Sound GenerateBeep(float freq, float dur, float vol) {
     return s;
 }
 
+// Explosion "boom": white-noise + low-freq sine sweep (220Hz → 40Hz) with
+// exponential decay. Sounds like a small bomb, no external samples needed.
+Sound GenerateBoom(float dur, float vol) {
+    int sampleRate  = 44100;
+    int sampleCount = (int)(sampleRate * dur);
+    short *data     = (short *)malloc(sampleCount * sizeof(short));
+    unsigned int rng = 0x9E3779B9u;
+    for (int i = 0; i < sampleCount; i++) {
+        float tSec  = (float)i / sampleRate;
+        float prog  = tSec / dur;                 // 0..1
+        float env   = expf(-prog * 4.5f);         // sharp decay
+        float freq  = 220.0f - 180.0f * prog;     // sweep down
+        float sine  = sinf(2.0f * PI * freq * tSec);
+        // xorshift32 noise in [-1, 1]
+        rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+        float noise = ((float)(rng & 0xFFFF) / 32768.0f) - 1.0f;
+        // Early burst dominated by noise, tail by rumble
+        float mix   = 0.55f * noise * (1.0f - prog * 0.7f) + 0.45f * sine;
+        float s     = mix * env * vol;
+        if (s >  1.0f) s =  1.0f;
+        if (s < -1.0f) s = -1.0f;
+        data[i] = (short)(s * 32767.0f);
+    }
+    Wave w = {.frameCount=(unsigned int)sampleCount, .sampleRate=44100,
+              .sampleSize=16, .channels=1, .data=data};
+    Sound s = LoadSoundFromWave(w);
+    free(data);
+    return s;
+}
+
 void PlaySfx(const Game *g, Sound snd) {
     if (g->soundEnabled && g->audioReady) PlaySound(snd);
 }
@@ -491,6 +522,7 @@ void DrawShockwaves(const Game *g) {
 // ── Explosive brick — destroys 4 neighbours, chains if they're also explosive ──
 void ExplodeBrick(Game *g, int col, int row) {
     SpawnExplosionFX(g, GetCellCenter(col, row));
+    PlaySfx(g, g->sndBoom);
     const int dx[] = {-1, 1, 0, 0};
     const int dy[] = {0, 0, -1, 1};
     for (int d = 0; d < 4; d++) {
@@ -675,6 +707,7 @@ void InitGame(Game *g) {
         g->sndGameOver = GenerateBeep(110.0f,  0.90f, 0.85f);
         g->sndRoundEnd = GenerateBeep(680.0f,  0.18f, 0.60f);
         g->sndLevelUp  = GenerateBeep(990.0f,  0.35f, 0.75f);
+        g->sndBoom     = GenerateBoom(0.55f, 0.95f);
     }
 
     LoadSaveData(g);
@@ -685,7 +718,7 @@ void InitGame(Game *g) {
 
 void ResetGame(Game *g, int startLevel) {
     Sound h = g->sndHit, d = g->sndDestroy, pk = g->sndPickup;
-    Sound go = g->sndGameOver, re = g->sndRoundEnd, lu = g->sndLevelUp;
+    Sound go = g->sndGameOver, re = g->sndRoundEnd, lu = g->sndLevelUp, bm = g->sndBoom;
     bool snd = g->soundEnabled, aud = g->audioReady;
     Highscore hs       = g->highscores;
     int unlocked       = g->unlockedLevels;
@@ -702,7 +735,7 @@ void ResetGame(Game *g, int startLevel) {
     g->soundEnabled = snd;
     g->audioReady   = aud;
     g->sndHit       = h; g->sndDestroy = d; g->sndPickup = pk;
-    g->sndGameOver  = go; g->sndRoundEnd = re; g->sndLevelUp = lu;
+    g->sndGameOver  = go; g->sndRoundEnd = re; g->sndLevelUp = lu; g->sndBoom = bm;
     g->highscores   = hs;
     g->unlockedLevels = unlocked;
     g->theme        = GetThemeForLevel(startLevel);
@@ -1992,6 +2025,7 @@ int main(void) {
         UnloadSound(g->sndHit);    UnloadSound(g->sndDestroy);
         UnloadSound(g->sndPickup); UnloadSound(g->sndGameOver);
         UnloadSound(g->sndRoundEnd); UnloadSound(g->sndLevelUp);
+        UnloadSound(g->sndBoom);
         CloseAudioDevice();
     }
     free(g);
