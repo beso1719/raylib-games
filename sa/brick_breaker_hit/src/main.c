@@ -66,7 +66,8 @@ typedef struct {
 typedef struct {
     int   hp, maxHp;
     bool  active;
-    bool  explosive;    // explodes on death — damages 4 neighbours
+    bool  explosive;    // explodes on death — destroys 4 neighbours
+    bool  superBomb;    // rare: destroys an entire row OR column on death
     int   col, row;
     Color color;
     float flashTimer, shakeX;
@@ -127,7 +128,7 @@ typedef struct {
     Shockwave  shockwaves[MAX_SHOCKWAVES];
     Star       stars[MAX_STARS];
 
-    Sound  sndHit, sndDestroy, sndPickup, sndGameOver, sndRoundEnd, sndLevelUp, sndBoom;
+    Sound  sndHit, sndDestroy, sndPickup, sndGameOver, sndRoundEnd, sndLevelUp, sndBoom, sndMegaBoom;
     bool   soundEnabled, audioReady;
 
     Highscore highscores;
@@ -206,12 +207,15 @@ bool  IsNewHighscore(const Highscore *hs, int score);
 void  InsertHighscore(Highscore *hs, const char *name, int score);
 Sound GenerateBeep(float freq, float dur, float vol);
 Sound GenerateBoom(float dur, float vol);
+Sound GenerateMegaBoom(float dur, float vol);
 void  PlaySfx(const Game *g, Sound snd);
 void  SpawnBrickParticles(Game *g, int col, int row, Color c);
 void  SpawnMenuOrb(Game *g);
 void  UpdateParticles(Game *g, float dt);
 void  ExplodeBrick(Game *g, int col, int row);
+void  ExplodeBrickLine(Game *g, int col, int row);
 void  SpawnExplosionFX(Game *g, Vector2 center);
+void  SpawnLineExplosionFX(Game *g, int col, int row, bool vertical);
 void  UpdateShockwaves(Game *g, float dt);
 void  DrawShockwaves(const Game *g);
 void  InitStars(Game *g);
@@ -391,6 +395,41 @@ Sound GenerateBoom(float dur, float vol) {
     return s;
 }
 
+// Mega boom: lower-pitch rumble for super-bomb line clears.
+// Triple-sine bass stack (50/75/110Hz) + noise + long decay tail.
+Sound GenerateMegaBoom(float dur, float vol) {
+    int sampleRate  = 44100;
+    int sampleCount = (int)(sampleRate * dur);
+    short *data     = (short *)malloc(sampleCount * sizeof(short));
+    unsigned int rng = 0xCAFEBABEu;
+    for (int i = 0; i < sampleCount; i++) {
+        float tSec  = (float)i / sampleRate;
+        float prog  = tSec / dur;
+        // Slower decay than regular boom for a sustained "BOOOM"
+        float env   = expf(-prog * 2.6f);
+        // Three-layer bass sweep
+        float f1    = 110.0f - 70.0f * prog;
+        float f2    = 75.0f  - 45.0f * prog;
+        float f3    = 50.0f  - 25.0f * prog;
+        float bass  = (sinf(2.0f * PI * f1 * tSec)
+                     + sinf(2.0f * PI * f2 * tSec) * 0.85f
+                     + sinf(2.0f * PI * f3 * tSec) * 0.75f) / 2.6f;
+        // Noise (loud early, quiet later)
+        rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5;
+        float noise = ((float)(rng & 0xFFFF) / 32768.0f) - 1.0f;
+        float mix   = 0.45f * noise * (1.0f - prog) + 0.55f * bass;
+        float s     = mix * env * vol;
+        if (s >  1.0f) s =  1.0f;
+        if (s < -1.0f) s = -1.0f;
+        data[i] = (short)(s * 32767.0f);
+    }
+    Wave w = {.frameCount=(unsigned int)sampleCount, .sampleRate=44100,
+              .sampleSize=16, .channels=1, .data=data};
+    Sound s = LoadSoundFromWave(w);
+    free(data);
+    return s;
+}
+
 void PlaySfx(const Game *g, Sound snd) {
     if (g->soundEnabled && g->audioReady) PlaySound(snd);
 }
@@ -519,6 +558,82 @@ void DrawShockwaves(const Game *g) {
     }
 }
 
+// ── Super-bomb FX: dense particles + giant shockwave along a row or column ────
+void SpawnLineExplosionFX(Game *g, int col, int row, bool vertical) {
+    // Big central burst + 3 shockwaves stacked at the origin
+    Vector2 center = GetCellCenter(col, row);
+    SpawnExplosionFX(g, center);
+    for (int i = 0; i < MAX_SHOCKWAVES; i++) {
+        Shockwave *sw = &g->shockwaves[i];
+        if (sw->life > 0.0f) continue;
+        sw->pos       = center;
+        sw->maxLife   = 0.75f;
+        sw->life      = sw->maxLife;
+        sw->maxRadius = 220.0f;
+        sw->color     = (Color){120, 220, 255, 255};   // cyan to distinguish from regular boom
+        break;
+    }
+    // Spawn fast streak particles along the affected line so the row/col is unmistakable
+    int spawned = 0;
+    int limit   = vertical ? GRID_ROWS : GRID_COLS;
+    for (int k = 0; k < limit; k++) {
+        int cc = vertical ? col : k;
+        int rr = vertical ? k   : row;
+        Vector2 cp = GetCellCenter(cc, rr);
+        for (int j = 0; j < MAX_PARTICLES && spawned < 80; j++) {
+            Particle *p = &g->particles[j];
+            if (p->life > 0.0f) continue;
+            // Velocity biased along the line for a sweep look
+            float vx = vertical ? (float)GetRandomValue(-90, 90)  : (float)GetRandomValue(-380, 380);
+            float vy = vertical ? (float)GetRandomValue(-380,380) : (float)GetRandomValue(-90, 90);
+            int pick = GetRandomValue(0, 2);
+            Color c = (pick == 0) ? (Color){180, 240, 255, 255}
+                    : (pick == 1) ? (Color){80,  180, 255, 255}
+                                  : (Color){255, 255, 255, 255};
+            p->pos      = cp;
+            p->vel      = (Vector2){vx, vy};
+            p->color    = c;
+            p->maxLife  = (float)GetRandomValue(45, 95) / 100.0f;
+            p->life     = p->maxLife;
+            p->size     = (float)GetRandomValue(4, 11);
+            p->rot      = (float)GetRandomValue(0, 360);
+            p->rotSpeed = (float)GetRandomValue(-700, 700);
+            spawned++;
+            break;
+        }
+    }
+}
+
+// ── Super bomb: destroy every brick in a random row OR column ─────────────────
+void ExplodeBrickLine(Game *g, int col, int row) {
+    bool vertical = (GetRandomValue(0, 1) == 0);
+    SpawnLineExplosionFX(g, col, row, vertical);
+    PlaySfx(g, g->sndMegaBoom);
+
+    for (int i = 0; i < MAX_BRICKS; i++) {
+        Brick *b = &g->bricks[i];
+        if (!b->active) continue;
+        bool inLine = vertical ? (b->col == col) : (b->row == row);
+        if (!inLine) continue;
+        bool wasExp = b->explosive;
+        bool wasSup = b->superBomb;
+        int  bc = b->col, br = b->row;
+        Color bCol = b->color;
+        b->hp = 0;
+        b->active = false;
+        g->score += SCORE_PER_BRICK;
+        g->roundCombo++;
+        g->comboDisplayTimer = 1.8f;
+        SpawnBrickParticles(g, bc, br, bCol);
+        // Chain reactions: a super in the line triggers another line clear,
+        // a regular explosive in the line triggers a neighbour burst.
+        // Skip the origin cell to avoid infinite recursion.
+        if (bc == col && br == row) continue;
+        if (wasSup) ExplodeBrickLine(g, bc, br);
+        else if (wasExp) ExplodeBrick(g, bc, br);
+    }
+}
+
 // ── Explosive brick — destroys 4 neighbours, chains if they're also explosive ──
 void ExplodeBrick(Game *g, int col, int row) {
     SpawnExplosionFX(g, GetCellCenter(col, row));
@@ -644,8 +759,14 @@ void SpawnNewRow(Game *g) {
                 g->bricks[s].color      = GetBrickColor(hp, g->level);
                 g->bricks[s].flashTimer = 0.0f;
                 g->bricks[s].shakeX     = 0.0f;
-                // Explosive bricks unlock at level 2+ (≈18% chance)
-                g->bricks[s].explosive  = (g->level >= 2) && (GetRandomValue(0, 5) == 0);
+                // Brick modifiers: rare super-bomb (row/col clear) > normal explosive
+                g->bricks[s].superBomb  = false;
+                g->bricks[s].explosive  = false;
+                if (g->level >= 3 && GetRandomValue(0, 19) == 0) {
+                    g->bricks[s].superBomb = true;
+                } else if (g->level >= 2 && GetRandomValue(0, 5) == 0) {
+                    g->bricks[s].explosive = true;
+                }
                 break;
             }
         }
@@ -709,6 +830,7 @@ void InitGame(Game *g) {
         g->sndRoundEnd = GenerateBeep(680.0f,  0.18f, 0.60f);
         g->sndLevelUp  = GenerateBeep(990.0f,  0.35f, 0.75f);
         g->sndBoom     = GenerateBoom(0.55f, 0.95f);
+        g->sndMegaBoom = GenerateMegaBoom(0.95f, 1.0f);
     }
 
     LoadSaveData(g);
@@ -719,7 +841,7 @@ void InitGame(Game *g) {
 
 void ResetGame(Game *g, int startLevel) {
     Sound h = g->sndHit, d = g->sndDestroy, pk = g->sndPickup;
-    Sound go = g->sndGameOver, re = g->sndRoundEnd, lu = g->sndLevelUp, bm = g->sndBoom;
+    Sound go = g->sndGameOver, re = g->sndRoundEnd, lu = g->sndLevelUp, bm = g->sndBoom, mb = g->sndMegaBoom;
     bool snd = g->soundEnabled, aud = g->audioReady;
     Highscore hs       = g->highscores;
     int unlocked       = g->unlockedLevels;
@@ -736,7 +858,7 @@ void ResetGame(Game *g, int startLevel) {
     g->soundEnabled = snd;
     g->audioReady   = aud;
     g->sndHit       = h; g->sndDestroy = d; g->sndPickup = pk;
-    g->sndGameOver  = go; g->sndRoundEnd = re; g->sndLevelUp = lu; g->sndBoom = bm;
+    g->sndGameOver  = go; g->sndRoundEnd = re; g->sndLevelUp = lu; g->sndBoom = bm; g->sndMegaBoom = mb;
     g->highscores   = hs;
     g->unlockedLevels = unlocked;
     g->theme        = GetThemeForLevel(startLevel);
@@ -863,6 +985,7 @@ void UpdateBallPhysics(Game *g, float dt) {
 
             if (br->hp <= 0) {
                 bool wasExplosive = br->explosive;
+                bool wasSuper     = br->superBomb;
                 int  bCol = br->col, bRow = br->row;
                 Color bColor = br->color;
                 SpawnBrickParticles(g, bCol, bRow, bColor);
@@ -871,7 +994,8 @@ void UpdateBallPhysics(Game *g, float dt) {
                 g->roundCombo++;
                 g->comboDisplayTimer = 1.8f;
                 PlaySfx(g, g->sndDestroy);
-                if (wasExplosive) ExplodeBrick(g, bCol, bRow);
+                if (wasSuper)          ExplodeBrickLine(g, bCol, bRow);
+                else if (wasExplosive) ExplodeBrick(g, bCol, bRow);
             } else {
                 PlaySfx(g, g->sndHit);
             }
@@ -1242,9 +1366,18 @@ void DrawBricks(const Game *g) {
 
         bool flashing = (b->flashTimer > 0.0f);
         // Explosive bricks ignore the per-HP palette and use an unmistakable
-        // pulsing fire color so the player can plan chains.
+        // pulsing color so the player can plan chains.
         Color baseCol = b->color;
-        if (b->explosive) {
+        if (b->superBomb) {
+            // Super-bomb: rapid magenta↔cyan pulse — visually distinct from regular explosive
+            float sp = 0.5f + 0.5f * sinf((float)GetTime() * 8.0f + b->col * 1.1f + b->row * 0.7f);
+            baseCol = (Color){
+                (unsigned char)(120 + (unsigned char)(80 * sp)),
+                (unsigned char)(60  + (unsigned char)(140 * sp)),
+                (unsigned char)(220 + (unsigned char)(35 * sp)),
+                255
+            };
+        } else if (b->explosive) {
             float ep = 0.5f + 0.5f * sinf((float)GetTime() * 5.5f + b->col * 0.9f + b->row * 0.6f);
             baseCol = (Color){
                 (unsigned char)(230 + (unsigned char)(25 * ep)),
@@ -1326,8 +1459,44 @@ void DrawBricks(const Game *g) {
         DrawText(hpBuf, tx+1, ty+2, fs, (Color){0,0,0,200});
         DrawText(hpBuf, tx, ty, fs, WHITE);
 
+        // Super-bomb indicator — magenta/cyan glow + crosshair (row+column arrows)
+        if (b->superBomb) {
+            float pulse = 0.5f + 0.5f * sinf((float)GetTime() * 7.0f + b->col * 1.3f);
+            Color sCol  = (Color){170, 90, 255, 255};
+            // Thick neon border + 4-layer outer glow
+            DrawRectangleRoundedLines(base, 0.22f, 6, Fade(sCol, 0.90f + pulse * 0.10f));
+            DrawRectangleRoundedLines(
+                (Rectangle){base.x-3, base.y-3, base.width+6, base.height+6},
+                0.22f, 6, Fade(sCol, 0.45f + pulse * 0.45f));
+            DrawRectangleRoundedLines(
+                (Rectangle){base.x-7, base.y-7, base.width+14, base.height+14},
+                0.22f, 6, Fade(sCol, 0.18f + pulse * 0.22f));
+            DrawRectangleRoundedLines(
+                (Rectangle){base.x-12, base.y-12, base.width+24, base.height+24},
+                0.22f, 6, Fade(sCol, 0.06f + pulse * 0.10f));
+
+            // Crosshair icon — small, top-right corner so the HP number stays readable
+            float icx = base.x + base.width - 11.0f;
+            float icy = base.y + 11.0f;
+            float arm = 6.5f;
+            Color iconCol = (Color){255, 240, 255, 255};
+            // Dark backing disc
+            DrawCircleV((Vector2){icx + 1, icy + 1}, arm + 1.5f, (Color){0,0,0,140});
+            DrawCircleV((Vector2){icx, icy}, arm + 1.0f, (Color){40, 10, 70, 255});
+            // Crosshair arms (full row+column hint)
+            DrawLineEx((Vector2){icx - arm, icy}, (Vector2){icx + arm, icy}, 1.8f, iconCol);
+            DrawLineEx((Vector2){icx, icy - arm}, (Vector2){icx, icy + arm}, 1.8f, iconCol);
+            // Arrow tips
+            float at = 2.5f;
+            DrawTriangle((Vector2){icx + arm, icy}, (Vector2){icx + arm - at, icy - at}, (Vector2){icx + arm - at, icy + at}, iconCol);
+            DrawTriangle((Vector2){icx - arm, icy}, (Vector2){icx - arm + at, icy + at}, (Vector2){icx - arm + at, icy - at}, iconCol);
+            DrawTriangle((Vector2){icx, icy - arm}, (Vector2){icx + at, icy - arm + at}, (Vector2){icx - at, icy - arm + at}, iconCol);
+            DrawTriangle((Vector2){icx, icy + arm}, (Vector2){icx - at, icy + arm - at}, (Vector2){icx + at, icy + arm - at}, iconCol);
+            // Pulsing center
+            DrawCircleV((Vector2){icx, icy}, 2.0f + pulse * 1.1f, Fade(iconCol, 0.85f));
+        }
         // Explosive indicator — thick pulsing border + outer glow rings + bomb icon
-        if (b->explosive) {
+        else if (b->explosive) {
             float pulse = 0.5f + 0.5f * sinf((float)GetTime() * 6.0f + b->col * 1.3f);
             Color expCol = (Color){255, 130, 25, 255};
 
@@ -2036,7 +2205,7 @@ int main(void) {
         UnloadSound(g->sndHit);    UnloadSound(g->sndDestroy);
         UnloadSound(g->sndPickup); UnloadSound(g->sndGameOver);
         UnloadSound(g->sndRoundEnd); UnloadSound(g->sndLevelUp);
-        UnloadSound(g->sndBoom);
+        UnloadSound(g->sndBoom); UnloadSound(g->sndMegaBoom);
         CloseAudioDevice();
     }
     free(g);
