@@ -29,6 +29,7 @@
 #define MAX_SELECTABLE_LEVELS 20
 #define TRAIL_LEN             12
 #define MAX_PARTICLES         300
+#define MAX_SHOCKWAVES        16
 #define MAX_STARS             100
 #define HUD_HEIGHT            48.0f
 #define INITIAL_BALLS         7
@@ -87,6 +88,12 @@ typedef struct {
     float x, y, size, phase, speed;
 } Star;
 
+typedef struct {
+    Vector2 pos;
+    float   life, maxLife, maxRadius;
+    Color   color;
+} Shockwave;
+
 typedef struct { char name[NAME_LEN]; int score; } ScoreEntry;
 typedef struct { ScoreEntry entries[MAX_SCORES]; int count; } Highscore;
 
@@ -117,6 +124,7 @@ typedef struct {
     Brick      bricks[MAX_BRICKS];
     BallPickup pickups[MAX_PICKUPS];
     Particle   particles[MAX_PARTICLES];
+    Shockwave  shockwaves[MAX_SHOCKWAVES];
     Star       stars[MAX_STARS];
 
     Sound  sndHit, sndDestroy, sndPickup, sndGameOver, sndRoundEnd, sndLevelUp;
@@ -202,6 +210,9 @@ void  SpawnBrickParticles(Game *g, int col, int row, Color c);
 void  SpawnMenuOrb(Game *g);
 void  UpdateParticles(Game *g, float dt);
 void  ExplodeBrick(Game *g, int col, int row);
+void  SpawnExplosionFX(Game *g, Vector2 center);
+void  UpdateShockwaves(Game *g, float dt);
+void  DrawShockwaves(const Game *g);
 void  InitStars(Game *g);
 
 void UpdateMenu(Game *g, float dt);
@@ -409,8 +420,77 @@ void UpdateParticles(Game *g, float dt) {
     }
 }
 
-// ── Explosive brick — damages 4 neighbours, chains if they're also explosive ───
+// ── Explosion FX: fire particles + expanding shockwave ring ───────────────────
+void SpawnExplosionFX(Game *g, Vector2 center) {
+    // Heavy burst of fire-colored particles
+    int spawned = 0;
+    for (int i = 0; i < MAX_PARTICLES && spawned < 28; i++) {
+        Particle *p = &g->particles[i];
+        if (p->life > 0.0f) continue;
+        float angle = (float)GetRandomValue(0, 360) * DEG2RAD;
+        float speed = (float)GetRandomValue(180, 520);
+        // Fire palette: white-yellow → orange → deep red
+        int pick = GetRandomValue(0, 2);
+        Color c = (pick == 0) ? (Color){255, 240, 180, 255}
+                : (pick == 1) ? (Color){255, 150,  40, 255}
+                              : (Color){230,  60,  20, 255};
+        p->pos      = center;
+        p->vel      = (Vector2){cosf(angle) * speed, sinf(angle) * speed};
+        p->color    = c;
+        p->maxLife  = (float)GetRandomValue(40, 90) / 100.0f;
+        p->life     = p->maxLife;
+        p->size     = (float)GetRandomValue(5, 13);
+        p->rot      = (float)GetRandomValue(0, 360);
+        p->rotSpeed = (float)GetRandomValue(-700, 700);
+        spawned++;
+    }
+    // Two stacked shockwaves: bright fast + wider slow
+    for (int s = 0; s < 2; s++) {
+        for (int i = 0; i < MAX_SHOCKWAVES; i++) {
+            Shockwave *sw = &g->shockwaves[i];
+            if (sw->life > 0.0f) continue;
+            sw->pos       = center;
+            sw->maxLife   = (s == 0) ? 0.35f : 0.55f;
+            sw->life      = sw->maxLife;
+            sw->maxRadius = (s == 0) ? 78.0f : 130.0f;
+            sw->color     = (s == 0) ? (Color){255, 220, 140, 255}
+                                     : (Color){255, 110,  40, 255};
+            break;
+        }
+    }
+}
+
+void UpdateShockwaves(Game *g, float dt) {
+    for (int i = 0; i < MAX_SHOCKWAVES; i++) {
+        if (g->shockwaves[i].life > 0.0f) {
+            g->shockwaves[i].life -= dt;
+            if (g->shockwaves[i].life < 0.0f) g->shockwaves[i].life = 0.0f;
+        }
+    }
+}
+
+void DrawShockwaves(const Game *g) {
+    for (int i = 0; i < MAX_SHOCKWAVES; i++) {
+        const Shockwave *sw = &g->shockwaves[i];
+        if (sw->life <= 0.0f) continue;
+        float t  = 1.0f - sw->life / sw->maxLife;  // 0..1 progress
+        float r  = sw->maxRadius * t;
+        float a  = (1.0f - t) * (1.0f - t);        // ease out
+        Color c  = sw->color;
+        c.a = (unsigned char)(a * 230);
+        DrawRing(sw->pos, r - 3.5f, r + 1.0f, 0, 360, 32, c);
+        // Inner soft fill near start
+        if (t < 0.45f) {
+            Color fill = sw->color;
+            fill.a = (unsigned char)((1.0f - t / 0.45f) * 60);
+            DrawCircleV(sw->pos, r * 0.9f, fill);
+        }
+    }
+}
+
+// ── Explosive brick — destroys 4 neighbours, chains if they're also explosive ──
 void ExplodeBrick(Game *g, int col, int row) {
+    SpawnExplosionFX(g, GetCellCenter(col, row));
     const int dx[] = {-1, 1, 0, 0};
     const int dy[] = {0, 0, -1, 1};
     for (int d = 0; d < 4; d++) {
@@ -872,6 +952,7 @@ void UpdatePlaying(Game *g, float dt) {
 
     g->launcherPulse += dt * 3.0f;
     UpdateParticles(g, dt);
+    UpdateShockwaves(g, dt);
 
     if (g->comboDisplayTimer > 0.0f) g->comboDisplayTimer -= dt;
 
@@ -1121,7 +1202,19 @@ void DrawBricks(const Game *g) {
         };
 
         bool flashing = (b->flashTimer > 0.0f);
-        Color col = flashing ? WHITE : b->color;
+        // Explosive bricks ignore the per-HP palette and use an unmistakable
+        // pulsing fire color so the player can plan chains.
+        Color baseCol = b->color;
+        if (b->explosive) {
+            float ep = 0.5f + 0.5f * sinf((float)GetTime() * 5.5f + b->col * 0.9f + b->row * 0.6f);
+            baseCol = (Color){
+                (unsigned char)(230 + (unsigned char)(25 * ep)),
+                (unsigned char)(80  + (unsigned char)(60 * ep)),
+                (unsigned char)(20  + (unsigned char)(20 * ep)),
+                255
+            };
+        }
+        Color col = flashing ? WHITE : baseCol;
         float hpRatio = (b->maxHp > 1) ? (float)b->hp / b->maxHp : 1.0f;
 
         // Drop shadow (deeper)
@@ -1194,21 +1287,42 @@ void DrawBricks(const Game *g) {
         DrawText(hpBuf, tx+1, ty+2, fs, (Color){0,0,0,200});
         DrawText(hpBuf, tx, ty, fs, WHITE);
 
-        // Explosive indicator — pulsing orange border + corner "!" + inner glow
+        // Explosive indicator — thick pulsing border + outer glow rings + bomb icon
         if (b->explosive) {
             float pulse = 0.5f + 0.5f * sinf((float)GetTime() * 6.0f + b->col * 1.3f);
-            Color expCol = (Color){255, 110, 20, 255};
-            // Inner warm glow
-            Color innerGlow = (Color){255, 80, 0, (unsigned char)(18 + pulse * 18)};
-            DrawRectangleRounded(base, 0.22f, 6, innerGlow);
+            Color expCol = (Color){255, 130, 25, 255};
+
+            // Thick neon border
+            DrawRectangleRoundedLines(base, 0.22f, 6, Fade(expCol, 0.85f + pulse * 0.15f));
+            // Outer pulsing glow rings
             DrawRectangleRoundedLines(
-                (Rectangle){base.x-2, base.y-2, base.width+4, base.height+4},
-                0.22f, 6, Fade(expCol, 0.50f + pulse * 0.40f));
+                (Rectangle){base.x-3, base.y-3, base.width+6, base.height+6},
+                0.22f, 6, Fade(expCol, 0.40f + pulse * 0.40f));
             DrawRectangleRoundedLines(
-                (Rectangle){base.x-5, base.y-5, base.width+10, base.height+10},
-                0.22f, 6, Fade(expCol, 0.14f + pulse * 0.14f));
-            DrawText("!", (int)(base.x + base.width - 11), (int)(base.y + 3), 13,
-                     Fade(expCol, 0.88f + pulse * 0.12f));
+                (Rectangle){base.x-7, base.y-7, base.width+14, base.height+14},
+                0.22f, 6, Fade(expCol, 0.12f + pulse * 0.18f));
+            DrawRectangleRoundedLines(
+                (Rectangle){base.x-11, base.y-11, base.width+22, base.height+22},
+                0.22f, 6, Fade(expCol, 0.05f + pulse * 0.08f));
+
+            // Big bomb icon (top-right corner): dark circle body + fuse + sparkle
+            float bx = base.x + base.width  - 11.0f;
+            float by = base.y + 11.0f;
+            float br = 8.0f;
+            DrawCircleV((Vector2){bx + 1, by + 2}, br, (Color){0, 0, 0, 140});      // shadow
+            DrawCircleV((Vector2){bx, by}, br, (Color){25, 25, 30, 255});            // bomb body
+            DrawCircleLines((int)bx, (int)by, br, (Color){0, 0, 0, 200});
+            // Highlight on bomb
+            DrawCircleV((Vector2){bx - 2.5f, by - 2.5f}, 2.2f, (Color){180, 180, 200, 220});
+            // Fuse
+            DrawLineEx((Vector2){bx + br * 0.55f, by - br * 0.55f},
+                       (Vector2){bx + br * 1.15f, by - br * 1.25f}, 1.6f, (Color){50, 30, 10, 255});
+            // Sparkle at fuse tip (pulses)
+            float sp = 1.6f + pulse * 1.4f;
+            Color spark = (Color){255, (unsigned char)(180 + pulse * 60), 50, 255};
+            DrawCircleV((Vector2){bx + br * 1.2f, by - br * 1.3f}, sp + 1.2f, Fade(spark, 0.55f));
+            DrawCircleV((Vector2){bx + br * 1.2f, by - br * 1.3f}, sp, spark);
+            DrawCircleV((Vector2){bx + br * 1.2f, by - br * 1.3f}, sp * 0.45f, WHITE);
         }
     }
 }
@@ -1423,6 +1537,7 @@ void DrawPlaying(const Game *g) {
 
     DrawParticles(g);
     DrawBricks(g);
+    DrawShockwaves(g);
     DrawPickups(g);
     DrawTrajectory(g);
     DrawBalls(g);
