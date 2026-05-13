@@ -616,8 +616,9 @@ void SpawnNewRow(Game *g) {
     }
 
     int globalRound = (g->level - 1) * ROUNDS_PER_LEVEL + g->round;
-    int newHP = (int)((float)globalRound * (1.0f + (g->level - 1) * 0.3f))
-                + GetRandomValue(0, globalRound / 3 + 1);
+    // Softer scaling: was 1.0× linear + 0.3 per level → now 0.7× linear + 0.15 per level
+    int newHP = (int)((float)globalRound * 0.7f * (1.0f + (g->level - 1) * 0.15f))
+                + GetRandomValue(0, globalRound / 4 + 1);
     if (newHP < 1) newHP = 1;
 
     int bricksInRow = GetRandomValue(2, GRID_COLS - 2);
