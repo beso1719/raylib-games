@@ -677,7 +677,7 @@ void SpawnNewRow(Game *g) {
             WriteSaveData(g);
         }
         // Level-up bonus: extra balls to keep up with rising difficulty
-        g->ballCount += 3;
+        g->ballCount += 6;
         g->theme        = GetThemeForLevel(g->level);
         g->levelUpTimer = 0.0f;
         g->state        = STATE_LEVEL_UP;
@@ -967,6 +967,11 @@ void UpdateLevelSelect(Game *g, float dt) {
     }
     if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_BACKSPACE)) g->state = STATE_MENU;
     if (IsKeyPressed(KEY_M)) g->soundEnabled = !g->soundEnabled;
+    // Reset level progress (locks everything past level 1)
+    if (IsKeyPressed(KEY_R)) {
+        g->unlockedLevels = 1;
+        WriteSaveData(g);
+    }
 }
 
 // ── Update: Paused ────────────────────────────────────────────────────────────
@@ -1805,6 +1810,11 @@ void DrawLevelSelect(const Game *g) {
     sprintf(progBuf, "Unlocked: %d / %d", g->unlockedLevels, MAX_SELECTABLE_LEVELS);
     int pgw = MeasureText(progBuf, 13);
     DrawText(progBuf, (SCREEN_W - pgw)/2, SCREEN_H - 24, 13, Fade(WHITE, 0.28f));
+
+    // Reset hint
+    const char *rh = "[R] Reset Progress";
+    int rhw = MeasureText(rh, 11);
+    DrawText(rh, SCREEN_W - rhw - 10, SCREEN_H - 16, 11, Fade(WHITE, 0.22f));
 }
 
 // ── Draw: Level Up ────────────────────────────────────────────────────────────
@@ -1842,7 +1852,7 @@ void DrawLevelUp(const Game *g) {
     int sbw = MeasureText(sub, 22);
     DrawText(sub, (SCREEN_W - sbw)/2, 330, 22, Fade(WHITE, alpha * 0.85f));
 
-    const char *bonus = "+3 BALLS";
+    const char *bonus = "+6 BALLS";
     int bbw = MeasureText(bonus, 20);
     DrawText(bonus, (SCREEN_W - bbw)/2 + 1, 397, 20, Fade(BLACK, alpha * 0.6f));
     DrawText(bonus, (SCREEN_W - bbw)/2,     396, 20, Fade((Color){255, 215, 60, 255}, alpha));
