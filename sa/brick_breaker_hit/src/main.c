@@ -32,6 +32,8 @@
 #define MAX_STARS             100
 #define HUD_HEIGHT            48.0f
 #define INITIAL_BALLS         7
+#define MIN_VY_RATIO          0.18f   // |vy| must stay above this * BALL_SPEED to prevent stuck balls
+#define ROUND_TIMEOUT_SEC     30.0f   // failsafe: force-end round if it drags on
 
 // ── Menu button layout ────────────────────────────────────────────────────────
 #define MENU_BTN_W   280
@@ -136,6 +138,9 @@ typedef struct {
     // Round combo
     int    roundCombo;
     float  comboDisplayTimer;
+
+    // Round timeout failsafe
+    float  roundElapsed;
 } Game;
 
 // ── Level themes (12 unique) ──────────────────────────────────────────────────
@@ -715,8 +720,28 @@ void UpdateBallPhysics(Game *g, float dt) {
             float oL = bR - cell.x, oR = (cell.x + cell.width)  - bL;
             float oT = bB - cell.y, oB = (cell.y + cell.height) - bT;
             float mX = fminf(oL, oR), mY = fminf(oT, oB);
-            if (mX < mY) b->velocity.x = -b->velocity.x;
-            else         b->velocity.y = -b->velocity.y;
+            if (mX < mY) {
+                b->velocity.x = -b->velocity.x;
+                // Push ball out of brick along X to prevent re-collision / tunneling between adjacent bricks
+                if (oL < oR) b->position.x = cell.x - BALL_RADIUS - 0.5f;
+                else         b->position.x = cell.x + cell.width + BALL_RADIUS + 0.5f;
+            } else {
+                b->velocity.y = -b->velocity.y;
+                if (oT < oB) b->position.y = cell.y - BALL_RADIUS - 0.5f;
+                else         b->position.y = cell.y + cell.height + BALL_RADIUS + 0.5f;
+            }
+            // Prevent stuck horizontal balls: enforce minimum |vy|
+            float minVy = BALL_SPEED * MIN_VY_RATIO;
+            if (fabsf(b->velocity.y) < minVy) {
+                float sy = (b->velocity.y >= 0.0f) ? 1.0f : -1.0f;
+                b->velocity.y = sy * minVy;
+                // Renormalize to preserve speed
+                float sp = sqrtf(b->velocity.x * b->velocity.x + b->velocity.y * b->velocity.y);
+                if (sp > 0.0001f) {
+                    b->velocity.x *= BALL_SPEED / sp;
+                    b->velocity.y *= BALL_SPEED / sp;
+                }
+            }
 
             br->hp--;
             br->flashTimer = 0.06f;
@@ -864,12 +889,27 @@ void UpdatePlaying(Game *g, float dt) {
                 g->firstReturned     = false;
                 g->launchTimer       = 0.0f;
                 g->roundCombo        = 0;
+                g->roundElapsed      = 0.0f;
                 for (int i = 0; i < BALL_POOL_SIZE; i++) { g->balls[i].active = false; g->balls[i].returned = false; }
             }
         }
     } else {
         UpdateFiring(g, dt);
         UpdateBallPhysics(g, dt);
+        g->roundElapsed += dt;
+        // Failsafe: if a round drags too long after all balls launched, force-return stragglers
+        if (g->ballsToFire == 0 && g->activeBallCount > 0 && g->roundElapsed > ROUND_TIMEOUT_SEC) {
+            for (int i = 0; i < BALL_POOL_SIZE; i++) {
+                Ball *bb = &g->balls[i];
+                if (bb->active) {
+                    bb->active   = false;
+                    bb->returned = true;
+                    if (!g->firstReturned) { g->firstReturned = true; g->firstReturnX = bb->position.x; }
+                    g->returnedBallCount++;
+                }
+            }
+            g->activeBallCount = 0;
+        }
         if (g->ballsToFire == 0 && g->activeBallCount == 0) CheckRoundEnd(g);
     }
 }
@@ -1680,8 +1720,9 @@ void DrawGameOver(const Game *g) {
     DrawText(go, (SCREEN_W - gw)/2, 185, gfs, Fade(RED, t));
 
     char buf[64];
-    int globalRound = (g->level - 1) * ROUNDS_PER_LEVEL + g->round - 1;
-    sprintf(buf, "Level %d  —  Round %d", g->level, globalRound > 0 ? globalRound : 1);
+    int reachedRound = (g->round > 1) ? g->round - 1 : 1;
+    int globalRound  = (g->level - 1) * ROUNDS_PER_LEVEL + reachedRound;
+    sprintf(buf, "Level %d  —  Round %d", g->level, globalRound);
     int bw = MeasureText(buf, 18);
     DrawText(buf, (SCREEN_W - bw)/2, 270, 18, Fade(LIGHTGRAY, t));
 
