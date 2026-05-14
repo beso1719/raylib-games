@@ -41,10 +41,11 @@
 
 // ── Menu button layout ────────────────────────────────────────────────────────
 #define MENU_BTN_W   280
-#define MENU_BTN_H   54
+#define MENU_BTN_H   48
 #define MENU_BTN_X   ((SCREEN_W - MENU_BTN_W) / 2)
-#define MENU_BTN_Y0  296
-#define MENU_BTN_GAP 68
+#define MENU_BTN_Y0  286
+#define MENU_BTN_GAP 60
+#define MENU_BTN_COUNT 5
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 typedef enum {
@@ -56,6 +57,8 @@ typedef enum {
     STATE_GAME_OVER,
     STATE_HIGHSCORE_ENTRY,
     STATE_HIGHSCORE_VIEW,
+    STATE_CREDITS,        // menu → credits screen
+    STATE_VICTORY,        // shown after clearing level 20
 } GameState;
 
 typedef struct { Vector2 pos[TRAIL_LEN]; int head, count; } Trail;
@@ -156,6 +159,10 @@ typedef struct {
 
     // Last level-up bonus amount (for the "+N BALLS" overlay)
     int    lastLevelBonus;
+
+    // Credits / Victory animation timers
+    float  creditsTimer;
+    float  victoryTimer;
 } Game;
 
 // ── Level themes (12 unique) ──────────────────────────────────────────────────
@@ -234,6 +241,8 @@ void UpdateLevelUp(Game *g, float dt);
 void UpdateGameOver(Game *g);
 void UpdateHighscoreEntry(Game *g);
 void UpdateHighscoreView(Game *g);
+void UpdateCredits(Game *g, float dt);
+void UpdateVictory(Game *g, float dt);
 void UpdateAim(Game *g);
 void UpdateFiring(Game *g, float dt);
 void UpdateBallPhysics(Game *g, float dt);
@@ -256,6 +265,8 @@ void DrawLevelUp(const Game *g);
 void DrawGameOver(const Game *g);
 void DrawHighscoreEntry(const Game *g);
 void DrawHighscoreView(const Game *g);
+void DrawCredits(const Game *g);
+void DrawVictory(const Game *g);
 void DrawMenuButton(const char *label, Rectangle rect, bool hovered, bool primary, Color accent);
 
 Color     GetBrickColor(int hp, int level);
@@ -811,8 +822,15 @@ void SpawnNewRow(Game *g) {
         g->lastLevelBonus  = bonus;
         g->theme        = GetThemeForLevel(g->level);
         g->levelUpTimer = 0.0f;
-        g->state        = STATE_LEVEL_UP;
-        PlaySfx(g, g->sndLevelUp);
+        // Beating level 20 → victory screen instead of another level
+        if (g->level > MAX_SELECTABLE_LEVELS) {
+            g->state        = STATE_VICTORY;
+            g->victoryTimer = 0.0f;
+            PlaySfx(g, g->sndLevelUp);
+        } else {
+            g->state        = STATE_LEVEL_UP;
+            PlaySfx(g, g->sndLevelUp);
+        }
     }
 }
 
@@ -1056,7 +1074,7 @@ void CheckRoundEnd(Game *g) {
 
     PlaySfx(g, g->sndRoundEnd);
     SpawnNewRow(g);
-    if (g->state == STATE_GAME_OVER || g->state == STATE_LEVEL_UP) return;
+    if (g->state == STATE_GAME_OVER || g->state == STATE_LEVEL_UP || g->state == STATE_VICTORY) return;
 
     for (int i = 0; i < BALL_POOL_SIZE; i++) { g->balls[i].active = false; g->balls[i].returned = false; }
     g->activeBallCount = g->returnedBallCount = 0;
@@ -1076,7 +1094,7 @@ void UpdateMenu(Game *g, float dt) {
 
     Vector2 mouse = GetMousePosition();
     g->menuHover = -1;
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < MENU_BTN_COUNT; i++) {
         if (CheckCollisionPointRec(mouse, GetMenuBtnRect(i))) { g->menuHover = i; break; }
     }
 
@@ -1085,14 +1103,17 @@ void UpdateMenu(Game *g, float dt) {
             case 0: ResetGame(g, 1); break;
             case 1: g->state = STATE_LEVEL_SELECT; break;
             case 2: g->state = STATE_HIGHSCORE_VIEW; break;
-            case 3: CloseWindow(); break;
+            case 3: g->state = STATE_CREDITS; break;
+            case 4: CloseWindow(); break;
         }
     }
     if (IsKeyPressed(KEY_ENTER))  ResetGame(g, 1);
     if (IsKeyPressed(KEY_L))      g->state = STATE_LEVEL_SELECT;
     if (IsKeyPressed(KEY_H))      g->state = STATE_HIGHSCORE_VIEW;
+    if (IsKeyPressed(KEY_C))      g->state = STATE_CREDITS;
     if (IsKeyPressed(KEY_M))      g->soundEnabled = !g->soundEnabled;
-    if (IsKeyPressed(KEY_ESCAPE)) CloseWindow();
+    // ESC on the main menu intentionally does nothing — Q / window-close quits
+    if (IsKeyPressed(KEY_Q))      CloseWindow();
 }
 
 // ── Update: Level Select ──────────────────────────────────────────────────────
@@ -1263,6 +1284,49 @@ void UpdateHighscoreEntry(Game *g) {
         WriteSaveData(g);
         g->state = STATE_HIGHSCORE_VIEW;
     }
+}
+
+// ── Update: Credits ───────────────────────────────────────────────────────────
+void UpdateCredits(Game *g, float dt) {
+    g->creditsTimer += dt;
+    UpdateParticles(g, dt);
+    // Keep a few drifting menu orbs alive in the background
+    int orbCount = 0;
+    for (int i = 0; i < MAX_PARTICLES; i++)
+        if (g->particles[i].life > 0.0f && g->particles[i].size >= 16) orbCount++;
+    if (orbCount < 6 && GetRandomValue(0, 45) == 0) SpawnMenuOrb(g);
+
+    if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_ENTER) ||
+        IsKeyPressed(KEY_BACKSPACE) || IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+        g->state = STATE_MENU;
+    }
+    if (IsKeyPressed(KEY_M)) g->soundEnabled = !g->soundEnabled;
+}
+
+// ── Update: Victory (after clearing level 20) ─────────────────────────────────
+void UpdateVictory(Game *g, float dt) {
+    g->victoryTimer += dt;
+    UpdateParticles(g, dt);
+    UpdateShockwaves(g, dt);
+    // Continuous fireworks: spawn an explosion FX in a random spot every so often
+    if (GetRandomValue(0, 8) == 0) {
+        Vector2 p = {(float)GetRandomValue(60, SCREEN_W - 60),
+                     (float)GetRandomValue(120, SCREEN_H - 200)};
+        SpawnExplosionFX(g, p);
+    }
+    // Save highscore opportunity if applicable, then allow exit
+    if (g->victoryTimer >= 1.5f &&
+        (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_ESCAPE) ||
+         IsMouseButtonPressed(MOUSE_LEFT_BUTTON))) {
+        if (IsNewHighscore(&g->highscores, g->score)) {
+            g->inputLen = 0;
+            memset(g->inputName, 0, NAME_LEN);
+            g->state = STATE_HIGHSCORE_ENTRY;
+        } else {
+            g->state = STATE_MENU;
+        }
+    }
+    if (IsKeyPressed(KEY_M)) g->soundEnabled = !g->soundEnabled;
 }
 
 // ── Update: Highscore View ────────────────────────────────────────────────────
@@ -1913,15 +1977,16 @@ void DrawMenu(const Game *g) {
     DrawCircleV((Vector2){(float)(SCREEN_W/2), 278.0f}, 3.0f, Fade(g->theme.accentA, 0.5f));
 
     // Buttons
-    Color accentPlay   = (Color){60, 210, 255, 255};
-    Color accentLvSel  = (Color){100, 130, 230, 255};
-    Color accentScores = (Color){100, 130, 230, 255};
-    Color accentQuit   = (Color){100, 100, 140, 255};
-    Color accents[]    = {accentPlay, accentLvSel, accentScores, accentQuit};
-    bool  primaries[]  = {true, false, false, false};
-    const char *labels[] = {"PLAY", "SELECT LEVEL", "HIGH SCORES", "QUIT"};
+    Color accentPlay    = (Color){60, 210, 255, 255};
+    Color accentLvSel   = (Color){100, 130, 230, 255};
+    Color accentScores  = (Color){100, 130, 230, 255};
+    Color accentCredits = (Color){200, 130, 230, 255};
+    Color accentQuit    = (Color){100, 100, 140, 255};
+    Color accents[]     = {accentPlay, accentLvSel, accentScores, accentCredits, accentQuit};
+    bool  primaries[]   = {true, false, false, false, false};
+    const char *labels[] = {"PLAY", "SELECT LEVEL", "HIGH SCORES", "CREDITS", "QUIT"};
 
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < MENU_BTN_COUNT; i++) {
         Rectangle r = GetMenuBtnRect(i);
         DrawMenuButton(labels[i], r, g->menuHover == i, primaries[i], accents[i]);
     }
@@ -1934,7 +1999,7 @@ void DrawMenu(const Game *g) {
     DrawText(sndBuf, (SCREEN_W - sndW)/2, SCREEN_H - 48, 13, sndCol);
 
     // Hint
-    const char *hint = "[L] Level Select   [H] Scores   [ESC] Quit";
+    const char *hint = "[L] Levels   [H] Scores   [C] Credits   [Q] Quit";
     int hw = MeasureText(hint, 11);
     DrawText(hint, (SCREEN_W - hw)/2, SCREEN_H - 28, 11, Fade(WHITE, 0.18f));
 }
@@ -2235,9 +2300,214 @@ void DrawHighscoreView(const Game *g) {
     DrawText(back, (SCREEN_W - bw)/2, 458, 16, Fade(LIGHTGRAY, blink));
 }
 
+// ── Draw: Credits ─────────────────────────────────────────────────────────────
+static void DrawCreditCard(int yCenter, const char *name, const char *role,
+                           float t, float phase, Color accent) {
+    int cardW = 360;
+    int cardX = (SCREEN_W - cardW) / 2;
+    int cardH = 76;
+    int cardY = yCenter - cardH / 2;
+
+    // Slide-in offset
+    float slide = (1.0f - t) * 60.0f;
+    float xOff  = sinf(phase) * 4.0f;  // gentle horizontal bob
+    cardX += (int)(slide + xOff);
+
+    // Outer glow
+    Color glow = accent; glow.a = 30;
+    DrawRectangleRounded((Rectangle){cardX - 5, cardY - 5, cardW + 10, cardH + 10}, 0.25f, 8, glow);
+
+    // Card background
+    DrawRectangleRounded((Rectangle){cardX, cardY, cardW, cardH}, 0.25f, 8, (Color){15, 18, 38, 220});
+    DrawRectangleRoundedLines((Rectangle){cardX, cardY, cardW, cardH}, 0.25f, 8, Fade(accent, 0.85f));
+    // Top glass strip
+    DrawRectangleRounded((Rectangle){cardX + 3, cardY + 3, cardW - 6, (cardH - 6) * 0.35f},
+                         0.25f, 6, Fade(WHITE, 0.10f));
+
+    // Decorative left orb
+    float ox = cardX + 32.0f;
+    float oy = cardY + cardH * 0.5f;
+    DrawCircleV((Vector2){ox, oy}, 18.0f, Fade(accent, 0.20f));
+    DrawCircleV((Vector2){ox, oy}, 13.0f, accent);
+    DrawCircleV((Vector2){ox - 3.5f, oy - 3.5f}, 4.5f, Fade(WHITE, 0.85f));
+    DrawCircleV((Vector2){ox - 2.0f, oy - 2.0f}, 2.0f, WHITE);
+
+    // Name
+    int nameFs = 26;
+    int nameW  = MeasureText(name, nameFs);
+    int nameX  = cardX + 64;
+    int nameY  = cardY + 14;
+    DrawText(name, nameX + 2, nameY + 2, nameFs, Fade(BLACK, 0.65f));
+    DrawText(name, nameX, nameY, nameFs, Fade(WHITE, 0.70f + t * 0.30f));
+    (void)nameW;
+
+    // Role
+    int roleFs = 13;
+    DrawText(role, nameX, nameY + nameFs + 4, roleFs, Fade(accent, 0.95f));
+}
+
+void DrawCredits(const Game *g) {
+    DrawBackground(g);
+    DrawParticles(g);
+    DrawRectangle(0, 0, SCREEN_W, SCREEN_H, Fade(BLACK, 0.45f));
+
+    float t = (float)GetTime();
+    // Big animated title
+    float hue = fmodf(g->creditsTimer * 50.0f, 360.0f);
+    const char *title = "CREDITS";
+    int tfs = 56;
+    int tw  = MeasureText(title, tfs);
+    DrawText(title, (SCREEN_W - tw)/2 + 3, 78, tfs, Fade(BLACK, 0.80f));
+    Color glowC = ColorFromHSV(hue, 0.85f, 1.0f); glowC.a = 50;
+    DrawText(title, (SCREEN_W - tw)/2 - 2, 75, tfs, glowC);
+    DrawText(title, (SCREEN_W - tw)/2, 75, tfs, ColorFromHSV(hue, 0.7f, 1.0f));
+
+    // Subtitle
+    const char *sub = "BRICKS BREAKER HIT";
+    int sw = MeasureText(sub, 18);
+    DrawText(sub, (SCREEN_W - sw)/2, 140, 18, Fade(WHITE, 0.75f));
+    const char *sub2 = "built with C and raylib";
+    int sw2 = MeasureText(sub2, 13);
+    DrawText(sub2, (SCREEN_W - sw2)/2, 164, 13, Fade((Color){160,180,220,255}, 0.85f));
+
+    // Divider
+    float lineA = 0.20f + 0.10f * sinf(t * 1.4f);
+    DrawLineEx((Vector2){(float)(SCREEN_W/2 - 130), 195.0f},
+               (Vector2){(float)(SCREEN_W/2 + 130), 195.0f}, 1.5f, Fade(WHITE, lineA));
+    DrawCircleV((Vector2){(float)(SCREEN_W/2), 195.0f}, 3.5f, Fade(g->theme.accentA, 0.7f));
+
+    // Three credit cards — stagger appear
+    struct { const char *name; const char *role; int y; Color accent; } credits[] = {
+        {"BESOCAN",    "Game Designer & Coder",   258, (Color){ 90, 220, 255, 255}},
+        {"AYSENURCAN", "Creative Direction",      352, (Color){255, 130, 200, 255}},
+        {"NURCAN",     "Producer & QA",           446, (Color){180, 130, 255, 255}},
+    };
+    for (int i = 0; i < 3; i++) {
+        float appearT = (g->creditsTimer - 0.10f - i * 0.18f) / 0.4f;
+        if (appearT < 0.0f) appearT = 0.0f;
+        if (appearT > 1.0f) appearT = 1.0f;
+        DrawCreditCard(credits[i].y, credits[i].name, credits[i].role,
+                       appearT, t * 1.3f + i * 0.9f, credits[i].accent);
+    }
+
+    // Thank-you tagline (fades in last)
+    float tt = (g->creditsTimer - 1.3f) / 0.5f;
+    if (tt > 1.0f) tt = 1.0f;
+    if (tt > 0.0f) {
+        const char *thx = "* Thanks for playing *";
+        int twx = MeasureText(thx, 17);
+        Color tCol = ColorFromHSV(fmodf(t * 60.0f, 360.0f), 0.6f, 1.0f);
+        DrawText(thx, (SCREEN_W - twx)/2, 532, 17, Fade(tCol, tt * 0.9f));
+    }
+
+    // Footer back hint
+    float blink = 0.5f + 0.5f * sinf(t * 2.5f);
+    const char *back = "[ESC] / [CLICK]  Back to Menu";
+    int bw = MeasureText(back, 14);
+    DrawText(back, (SCREEN_W - bw)/2, SCREEN_H - 36, 14, Fade(LIGHTGRAY, 0.4f + blink * 0.4f));
+}
+
+// ── Draw: Victory ─────────────────────────────────────────────────────────────
+void DrawVictory(const Game *g) {
+    DrawBackground(g);
+    DrawShockwaves(g);
+    DrawParticles(g);
+    DrawRectangle(0, 0, SCREEN_W, SCREEN_H, Fade(BLACK, 0.55f));
+
+    float t  = (float)GetTime();
+    float vt = g->victoryTimer;
+
+    // Massive title with rainbow shimmer
+    float titleScale = fminf(vt / 0.6f, 1.0f);
+    int fs = (int)(64 * (0.55f + titleScale * 0.45f));
+    const char *title = "YOU WIN!";
+    int tw = MeasureText(title, fs);
+
+    // Rainbow letter pass: redraw with hue offset per letter for shimmer
+    DrawText(title, (SCREEN_W - tw)/2 + 4, 96, fs, Fade(BLACK, 0.80f));
+    // Glow stack
+    for (int g_i = 3; g_i > 0; g_i--) {
+        Color c = ColorFromHSV(fmodf(t * 90.0f, 360.0f), 0.85f, 1.0f);
+        c.a = (unsigned char)(40 / g_i);
+        DrawText(title, (SCREEN_W - tw)/2 - g_i, 96 - g_i, fs, c);
+        DrawText(title, (SCREEN_W - tw)/2 + g_i, 96 + g_i, fs, c);
+    }
+    DrawText(title, (SCREEN_W - tw)/2, 96, fs, ColorFromHSV(fmodf(t * 70.0f, 360.0f), 0.75f, 1.0f));
+
+    // Subtitle
+    const char *sub = "Level 20 cleared";
+    int sw = MeasureText(sub, 22);
+    DrawText(sub, (SCREEN_W - sw)/2, 178, 22, Fade(WHITE, 0.85f));
+    char scBuf[64];
+    sprintf(scBuf, "Final score: %d", g->score);
+    int scW = MeasureText(scBuf, 20);
+    DrawText(scBuf, (SCREEN_W - scW)/2, 212, 20, Fade((Color){255, 220, 80, 255}, 0.95f));
+
+    // Trophy: stylized chalice using primitives
+    float cx = SCREEN_W / 2.0f;
+    float cy = 296.0f;
+    float pulse = 0.5f + 0.5f * sinf(t * 2.4f);
+    // Trophy glow
+    DrawCircleV((Vector2){cx, cy + 6}, 70.0f + pulse * 8.0f, Fade((Color){255, 220, 80, 255}, 0.10f + pulse * 0.06f));
+    DrawCircleV((Vector2){cx, cy + 6}, 48.0f, Fade((Color){255, 220, 80, 255}, 0.18f));
+    // Cup body
+    Color gold     = (Color){255, 210, 60, 255};
+    Color goldDark = (Color){200, 145, 20, 255};
+    DrawRectangleRounded((Rectangle){cx - 36, cy - 22, 72, 44}, 0.5f, 8, gold);
+    DrawRectangleRounded((Rectangle){cx - 30, cy - 18, 60, 18}, 0.45f, 6, (Color){255, 245, 200, 255});
+    // Handles
+    DrawRing((Vector2){cx - 40, cy - 6}, 8.5f, 13.0f, 50, 240, 24, goldDark);
+    DrawRing((Vector2){cx + 40, cy - 6}, 8.5f, 13.0f, -60, 130, 24, goldDark);
+    // Stem
+    DrawRectangleRounded((Rectangle){cx - 7, cy + 22, 14, 18}, 0.5f, 6, goldDark);
+    // Base
+    DrawRectangleRounded((Rectangle){cx - 26, cy + 40, 52, 10}, 0.5f, 6, gold);
+    DrawRectangleRounded((Rectangle){cx - 32, cy + 50, 64, 8}, 0.4f, 6, goldDark);
+    // Star on cup
+    float sr = 11.0f + pulse * 1.5f;
+    DrawPoly((Vector2){cx, cy - 2}, 5, sr, t * 30.0f, WHITE);
+    DrawPoly((Vector2){cx, cy - 2}, 5, sr * 0.55f, t * 30.0f + 36.0f, gold);
+
+    // "Made by:" line
+    const char *by = "MADE BY";
+    int bw = MeasureText(by, 17);
+    DrawText(by, (SCREEN_W - bw)/2, 378, 17, Fade(WHITE, 0.65f));
+    // Wavy underline
+    for (int i = 0; i < 60; i++) {
+        float xx = (SCREEN_W/2.0f) - 60.0f + i * 2.0f;
+        float yy = 400.0f + sinf(t * 2.5f + i * 0.25f) * 2.0f;
+        DrawCircleV((Vector2){xx, yy}, 1.2f, Fade(g->theme.accentA, 0.55f));
+    }
+
+    // Three names — animated rainbow
+    const char *names[] = {"BESOCAN", "AYSENURCAN", "NURCAN"};
+    float yOffsets[] = {426, 470, 514};
+    for (int i = 0; i < 3; i++) {
+        float wave  = sinf(t * 2.2f + i * 1.3f);
+        float scale = 1.0f + 0.04f * wave;
+        int nfs = (int)(28 * scale);
+        int nw  = MeasureText(names[i], nfs);
+        Color nc = ColorFromHSV(fmodf(t * 60.0f + i * 110.0f, 360.0f), 0.75f, 1.0f);
+        // Shadow + glow
+        DrawText(names[i], (SCREEN_W - nw)/2 + 3, (int)yOffsets[i] + 3, nfs, Fade(BLACK, 0.7f));
+        Color glw = nc; glw.a = 60;
+        DrawText(names[i], (SCREEN_W - nw)/2 - 2, (int)yOffsets[i] - 1, nfs, glw);
+        DrawText(names[i], (SCREEN_W - nw)/2,     (int)yOffsets[i],     nfs, nc);
+    }
+
+    // Hint
+    if (vt > 1.5f) {
+        float bl = 0.5f + 0.5f * sinf(t * 3.5f);
+        const char *hint = "[ENTER] Continue";
+        int hw = MeasureText(hint, 16);
+        DrawText(hint, (SCREEN_W - hw)/2, SCREEN_H - 36, 16, Fade(WHITE, 0.4f + bl * 0.4f));
+    }
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 int main(void) {
-    InitWindow(SCREEN_W, SCREEN_H, "Brick Breaker Hit  v4");
+    InitWindow(SCREEN_W, SCREEN_H, "Bricks Breaker Hit");
+    SetExitKey(KEY_NULL);   // ESC must NOT close the window — game manages ESC itself
     SetTargetFPS(60);
     InitAudioDevice();
 
@@ -2256,6 +2526,8 @@ int main(void) {
             case STATE_GAME_OVER:       UpdateGameOver(g);         break;
             case STATE_HIGHSCORE_ENTRY: UpdateHighscoreEntry(g);   break;
             case STATE_HIGHSCORE_VIEW:  UpdateHighscoreView(g);    break;
+            case STATE_CREDITS:         UpdateCredits(g, dt);      break;
+            case STATE_VICTORY:         UpdateVictory(g, dt);      break;
         }
         BeginDrawing();
         ClearBackground((Color){8, 8, 20, 255});
@@ -2268,6 +2540,8 @@ int main(void) {
             case STATE_GAME_OVER:       DrawGameOver(g);                    break;
             case STATE_HIGHSCORE_ENTRY: DrawHighscoreEntry(g);              break;
             case STATE_HIGHSCORE_VIEW:  DrawHighscoreView(g);               break;
+            case STATE_CREDITS:         DrawCredits(g);                     break;
+            case STATE_VICTORY:         DrawVictory(g);                     break;
         }
         EndDrawing();
     }
