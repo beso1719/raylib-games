@@ -33,7 +33,9 @@
 #define MAX_STARS             100
 #define HUD_HEIGHT            48.0f
 #define INITIAL_BALLS         7
-#define LEVEL_UP_BALL_BONUS   8   // extra balls awarded each time the player clears a level
+// Per-level ball bonus scales linearly so higher levels remain beatable
+// despite the steeper HP curve: bonus(level_just_cleared) = 8 + 2*level.
+#define LEVEL_UP_BALL_BONUS(level) (8 + 2 * (level))
 #define MIN_VY_RATIO          0.18f   // |vy| must stay above this * BALL_SPEED to prevent stuck balls
 #define ROUND_TIMEOUT_SEC     30.0f   // failsafe: force-end round if it drags on
 
@@ -151,6 +153,9 @@ typedef struct {
 
     // Round timeout failsafe
     float  roundElapsed;
+
+    // Last level-up bonus amount (for the "+N BALLS" overlay)
+    int    lastLevelBonus;
 } Game;
 
 // ── Level themes (12 unique) ──────────────────────────────────────────────────
@@ -800,8 +805,10 @@ void SpawnNewRow(Game *g) {
             g->unlockedLevels = g->level;
             WriteSaveData(g);
         }
-        // Level-up bonus: extra balls to keep up with rising difficulty
-        g->ballCount += LEVEL_UP_BALL_BONUS;
+        // Level-up bonus: scales linearly with the level just cleared
+        int bonus = LEVEL_UP_BALL_BONUS(g->level - 1);
+        g->ballCount      += bonus;
+        g->lastLevelBonus  = bonus;
         g->theme        = GetThemeForLevel(g->level);
         g->levelUpTimer = 0.0f;
         g->state        = STATE_LEVEL_UP;
@@ -855,8 +862,9 @@ void ResetGame(Game *g, int startLevel) {
     g->round        = 1;
     g->level        = startLevel;
     // Start with the ball count this level should naturally have:
-    // base + per-level bonus for every level already cleared.
-    g->ballCount    = INITIAL_BALLS + (startLevel - 1) * LEVEL_UP_BALL_BONUS;
+    // base + sum of scaled bonuses for every level already cleared.
+    g->ballCount = INITIAL_BALLS;
+    for (int k = 1; k < startLevel; k++) g->ballCount += LEVEL_UP_BALL_BONUS(k);
     g->launcherX    = LAUNCHER_X;
     g->aimDir       = (Vector2){0.0f, -1.0f};
     g->soundEnabled = snd;
@@ -1110,14 +1118,19 @@ void UpdateLevelSelect(Game *g, float dt) {
 
 // ── Update: Paused ────────────────────────────────────────────────────────────
 void UpdatePaused(Game *g) {
-    if (IsKeyPressed(KEY_P) || IsKeyPressed(KEY_ESCAPE)) g->state = STATE_PLAYING;
-    if (IsKeyPressed(KEY_Q)) g->state = STATE_MENU;
-    if (IsKeyPressed(KEY_M)) g->soundEnabled = !g->soundEnabled;
+    if (IsKeyPressed(KEY_P))      g->state = STATE_PLAYING;
+    if (IsKeyPressed(KEY_ESCAPE)) g->state = STATE_MENU;
+    if (IsKeyPressed(KEY_Q))      g->state = STATE_MENU;
+    if (IsKeyPressed(KEY_M))      g->soundEnabled = !g->soundEnabled;
 }
 
 // ── Update: Playing ───────────────────────────────────────────────────────────
 void UpdatePlaying(Game *g, float dt) {
-    if (IsKeyPressed(KEY_P) || IsKeyPressed(KEY_ESCAPE)) {
+    if (IsKeyPressed(KEY_ESCAPE)) {
+        g->state = STATE_MENU;
+        return;
+    }
+    if (IsKeyPressed(KEY_P)) {
         g->state = STATE_PAUSED;
         return;
     }
@@ -1161,9 +1174,11 @@ void UpdatePlaying(Game *g, float dt) {
             }
             g->activeBallCount = 0;
         }
-        UpdateFiring(g, dt);
-        UpdateBallPhysics(g, dt);
-        g->roundElapsed += dt;
+        // RIGHT arrow held = 2x ball/fire speed
+        float pdt = IsKeyDown(KEY_RIGHT) ? dt * 2.0f : dt;
+        UpdateFiring(g, pdt);
+        UpdateBallPhysics(g, pdt);
+        g->roundElapsed += pdt;
         // Failsafe: if a round drags too long after all balls launched, force-return stragglers
         if (g->ballsToFire == 0 && g->activeBallCount > 0 && g->roundElapsed > ROUND_TIMEOUT_SEC) {
             for (int i = 0; i < BALL_POOL_SIZE; i++) {
@@ -1795,10 +1810,17 @@ void DrawPlaying(const Game *g) {
         int hw = MeasureText(hint, 14);
         DrawText(hint, (SCREEN_W - hw)/2, SCREEN_H - 28, 14, Fade(LIGHTGRAY, alpha));
     } else {
-        // Recall hint while balls are flying
-        const char *rh = "[DOWN] RECALL BALLS";
+        // Recall + speed hints while balls are flying
+        const char *rh = "[DOWN] RECALL    [RIGHT] 2x SPEED";
         int rhw = MeasureText(rh, 12);
         DrawText(rh, (SCREEN_W - rhw)/2, SCREEN_H - 26, 12, Fade(LIGHTGRAY, 0.45f));
+        if (IsKeyDown(KEY_RIGHT)) {
+            const char *fx = "2x";
+            int fxw = MeasureText(fx, 28);
+            float p = 0.5f + 0.5f * sinf((float)GetTime() * 12.0f);
+            DrawText(fx, SCREEN_W - fxw - 12 + 2, 56 + 2, 28, Fade(BLACK, 0.6f));
+            DrawText(fx, SCREEN_W - fxw - 12,     56,     28, Fade((Color){255, 220, 60, 255}, 0.85f + p * 0.15f));
+        }
     }
 }
 
@@ -1814,9 +1836,9 @@ void DrawPaused(const Game *g) {
     DrawText(title, (SCREEN_W - tw)/2,     268, 54, ColorFromHSV(hue, 0.50f, 1.0f));
 
     struct { const char *text; int y; } items[] = {
-        {"[P] / [ESC]  Resume",  356},
-        {"[Q]  Back to Menu",    396},
-        {"[M]  Toggle Sound",    436},
+        {"[P]   Resume",         356},
+        {"[ESC] Back to Menu",   396},
+        {"[M]   Toggle Sound",   436},
     };
     for (int i = 0; i < 3; i++) {
         int iw = MeasureText(items[i].text, 19);
@@ -2052,10 +2074,11 @@ void DrawLevelUp(const Game *g) {
     int sbw = MeasureText(sub, 22);
     DrawText(sub, (SCREEN_W - sbw)/2, 330, 22, Fade(WHITE, alpha * 0.85f));
 
-    const char *bonus = "+8 BALLS";
-    int bbw = MeasureText(bonus, 20);
-    DrawText(bonus, (SCREEN_W - bbw)/2 + 1, 397, 20, Fade(BLACK, alpha * 0.6f));
-    DrawText(bonus, (SCREEN_W - bbw)/2,     396, 20, Fade((Color){255, 215, 60, 255}, alpha));
+    char bonusBuf[16];
+    snprintf(bonusBuf, sizeof(bonusBuf), "+%d BALLS", g->lastLevelBonus > 0 ? g->lastLevelBonus : 0);
+    int bbw = MeasureText(bonusBuf, 20);
+    DrawText(bonusBuf, (SCREEN_W - bbw)/2 + 1, 397, 20, Fade(BLACK, alpha * 0.6f));
+    DrawText(bonusBuf, (SCREEN_W - bbw)/2,     396, 20, Fade((Color){255, 215, 60, 255}, alpha));
 
     char scoreBuf[32];
     sprintf(scoreBuf, "Score: %d", g->score);
