@@ -32,10 +32,11 @@
 #define MAX_SHOCKWAVES        16
 #define MAX_STARS             100
 #define HUD_HEIGHT            48.0f
-#define INITIAL_BALLS         7
-// Per-level ball bonus scales linearly so higher levels remain beatable
-// despite the steeper HP curve: bonus(level_just_cleared) = 8 + 2*level.
-#define LEVEL_UP_BALL_BONUS(level) (8 + 2 * (level))
+#define INITIAL_BALLS         5
+// Per-level ball bonus scales linearly. Reduced to ~2/3 of previous values
+// so games stay shorter and per-round combos matter more:
+// bonus(level_just_cleared) = ((8 + 2*level) * 2) / 3.
+#define LEVEL_UP_BALL_BONUS(level) (((8 + 2 * (level)) * 2) / 3)
 #define MIN_VY_RATIO          0.18f   // |vy| must stay above this * BALL_SPEED to prevent stuck balls
 #define ROUND_TIMEOUT_SEC     30.0f   // failsafe: force-end round if it drags on
 
@@ -1277,8 +1278,10 @@ void UpdatePlaying(Game *g, float dt) {
             }
             g->activeBallCount = 0;
         }
-        // RIGHT arrow held = 2x ball/fire speed
-        float pdt = IsKeyDown(KEY_RIGHT) ? dt * 2.0f : dt;
+        // RIGHT arrow held = fast-forward; multiplier grows every 5 levels
+        // (L1-4: 2x, L5-9: 3x, L10-14: 4x, L15-19: 5x, L20: 6x)
+        int   ffMul = 2 + g->level / 5;
+        float pdt = IsKeyDown(KEY_RIGHT) ? dt * (float)ffMul : dt;
         UpdateFiring(g, pdt);
         UpdateBallPhysics(g, pdt);
         g->roundElapsed += pdt;
@@ -1967,11 +1970,14 @@ void DrawPlaying(const Game *g) {
         DrawText(hint, (SCREEN_W - hw)/2, SCREEN_H - 28, 14, Fade(LIGHTGRAY, alpha));
     } else {
         // Recall + speed hints while balls are flying
-        const char *rh = "[DOWN] RECALL    [RIGHT] 2x SPEED";
+        int   ffMul = 2 + g->level / 5;
+        char rh[64];
+        snprintf(rh, sizeof(rh), "[DOWN] RECALL    [RIGHT] %dx SPEED", ffMul);
         int rhw = MeasureText(rh, 12);
         DrawText(rh, (SCREEN_W - rhw)/2, SCREEN_H - 26, 12, Fade(LIGHTGRAY, 0.45f));
         if (IsKeyDown(KEY_RIGHT)) {
-            const char *fx = "2x";
+            char fx[8];
+            snprintf(fx, sizeof(fx), "%dx", ffMul);
             int fxw = MeasureText(fx, 28);
             float p = 0.5f + 0.5f * sinf((float)GetTime() * 12.0f);
             DrawText(fx, SCREEN_W - fxw - 12 + 2, 56 + 2, 28, Fade(BLACK, 0.6f));
@@ -2013,12 +2019,12 @@ void DrawMenu(const Game *g) {
 
     // Animated title
     float hue = fmodf(g->menuAnimT * 42.0f, 360.0f);
-    const char *t1 = "BRICK BREAKER";
-    int tw1 = MeasureText(t1, 36);
-    DrawText(t1, (SCREEN_W-tw1)/2 + 2, 102, 36, Fade(BLACK, 0.75f));
-    DrawText(t1, (SCREEN_W-tw1)/2, 99, 36, ColorFromHSV(hue, 0.55f, 0.95f));
+    const char *t1 = "the legend of";
+    int tw1 = MeasureText(t1, 28);
+    DrawText(t1, (SCREEN_W-tw1)/2 + 2, 110, 28, Fade(BLACK, 0.75f));
+    DrawText(t1, (SCREEN_W-tw1)/2, 107, 28, ColorFromHSV(hue, 0.55f, 0.95f));
 
-    const char *t2 = "HIT";
+    const char *t2 = "PATLICAN";
     int tw2 = MeasureText(t2, 72);
     // Text shadow + glow
     DrawText(t2, (SCREEN_W-tw2)/2 + 3, 143, 72, Fade(BLACK, 0.85f));
@@ -2436,7 +2442,7 @@ void DrawCredits(const Game *g) {
     DrawText(title, (SCREEN_W - tw)/2, 75, tfs, ColorFromHSV(hue, 0.7f, 1.0f));
 
     // Subtitle
-    const char *sub = "BRICKS BREAKER HIT";
+    const char *sub = "PATLICAN";
     int sw = MeasureText(sub, 18);
     DrawText(sub, (SCREEN_W - sw)/2, 140, 18, Fade(WHITE, 0.75f));
     const char *sub2 = "built with C and raylib";
@@ -2637,7 +2643,7 @@ Image BuildAppIcon(void) {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 int main(void) {
-    InitWindow(SCREEN_W, SCREEN_H, "Bricks Breaker Hit");
+    InitWindow(SCREEN_W, SCREEN_H, "PATLICAN");
     SetExitKey(KEY_NULL);   // ESC must NOT close the window — game manages ESC itself
     // Set the runtime window/taskbar icon (separate from the .exe-embedded ICO
     // used by Explorer). Built from raylib primitives — no asset file needed.
