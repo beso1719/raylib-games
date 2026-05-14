@@ -20,7 +20,7 @@
 #define BALL_SPEED            680.0f
 #define BALL_LAUNCH_DELAY     0.06f
 #define MAX_BRICKS            (GRID_COLS * GRID_ROWS)
-#define BALL_POOL_SIZE        200
+#define BALL_POOL_SIZE        800   // must exceed the highest possible ballCount
 #define MAX_PICKUPS           (GRID_COLS * 2)
 #define SCORE_PER_BRICK       10
 #define MAX_SCORES            5
@@ -901,7 +901,8 @@ void UpdateAim(Game *g) {
 }
 
 // ── Firing ────────────────────────────────────────────────────────────────────
-static void FireOneBall(Game *g) {
+// Returns true if a slot was found and the ball was launched
+static bool FireOneBall(Game *g) {
     for (int i = 0; i < BALL_POOL_SIZE; i++) {
         if (!g->balls[i].active && !g->balls[i].returned) {
             g->balls[i].active   = true;
@@ -910,18 +911,24 @@ static void FireOneBall(Game *g) {
             g->balls[i].velocity = (Vector2){g->aimDir.x * BALL_SPEED, g->aimDir.y * BALL_SPEED};
             memset(&g->balls[i].trail, 0, sizeof(Trail));
             g->activeBallCount++;
-            return;
+            return true;
         }
     }
+    return false;
 }
 
 void UpdateFiring(Game *g, float dt) {
     if (g->ballsToFire <= 0) return;
     g->launchTimer -= dt;
     if (g->launchTimer <= 0.0f) {
-        FireOneBall(g);
-        g->ballsToFire--;
-        g->launchTimer = BALL_LAUNCH_DELAY;
+        // Only consume a queued ball if we actually launched it. Otherwise the
+        // pool is full this frame — wait without losing the queued ball.
+        if (FireOneBall(g)) {
+            g->ballsToFire--;
+            g->launchTimer = BALL_LAUNCH_DELAY;
+        } else {
+            g->launchTimer = 0.0f;
+        }
     }
 }
 
@@ -1138,6 +1145,18 @@ void UpdatePlaying(Game *g, float dt) {
     g->launcherPulse += dt * 3.0f;
     UpdateParticles(g, dt);
     UpdateShockwaves(g, dt);
+
+    // Safety: if we somehow ended up in an active round with absolutely nothing
+    // happening (no balls queued, none flying, none on the field), force the
+    // round to end so the player can fire again. Guards against any edge case
+    // where roundActive stays stuck true.
+    if (g->roundActive && g->ballsToFire == 0 && g->activeBallCount == 0) {
+        bool any = false;
+        for (int i = 0; i < BALL_POOL_SIZE; i++) {
+            if (g->balls[i].active) { any = true; break; }
+        }
+        if (!any) CheckRoundEnd(g);
+    }
 
     if (g->comboDisplayTimer > 0.0f) g->comboDisplayTimer -= dt;
 
