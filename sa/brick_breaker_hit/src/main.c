@@ -1147,6 +1147,20 @@ void UpdatePlaying(Game *g, float dt) {
             }
         }
     } else {
+        // DOWN arrow: instantly recall every ball (cancel pending fires too)
+        if (IsKeyPressed(KEY_DOWN)) {
+            g->ballsToFire = 0;
+            for (int i = 0; i < BALL_POOL_SIZE; i++) {
+                Ball *bb = &g->balls[i];
+                if (bb->active) {
+                    bb->active   = false;
+                    bb->returned = true;
+                    if (!g->firstReturned) { g->firstReturned = true; g->firstReturnX = bb->position.x; }
+                    g->returnedBallCount++;
+                }
+            }
+            g->activeBallCount = 0;
+        }
         UpdateFiring(g, dt);
         UpdateBallPhysics(g, dt);
         g->roundElapsed += dt;
@@ -1780,6 +1794,11 @@ void DrawPlaying(const Game *g) {
         const char *hint = "CLICK TO SHOOT";
         int hw = MeasureText(hint, 14);
         DrawText(hint, (SCREEN_W - hw)/2, SCREEN_H - 28, 14, Fade(LIGHTGRAY, alpha));
+    } else {
+        // Recall hint while balls are flying
+        const char *rh = "[DOWN] RECALL BALLS";
+        int rhw = MeasureText(rh, 12);
+        DrawText(rh, (SCREEN_W - rhw)/2, SCREEN_H - 26, 12, Fade(LIGHTGRAY, 0.45f));
     }
 }
 
