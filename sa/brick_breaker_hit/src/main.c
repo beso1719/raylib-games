@@ -33,6 +33,7 @@
 #define MAX_STARS             100
 #define HUD_HEIGHT            48.0f
 #define INITIAL_BALLS         7
+#define LEVEL_UP_BALL_BONUS   8   // extra balls awarded each time the player clears a level
 #define MIN_VY_RATIO          0.18f   // |vy| must stay above this * BALL_SPEED to prevent stuck balls
 #define ROUND_TIMEOUT_SEC     30.0f   // failsafe: force-end round if it drags on
 
@@ -638,9 +639,10 @@ void ExplodeBrickLine(Game *g, int col, int row) {
 void ExplodeBrick(Game *g, int col, int row) {
     SpawnExplosionFX(g, GetCellCenter(col, row));
     PlaySfx(g, g->sndBoom);
-    const int dx[] = {-1, 1, 0, 0};
-    const int dy[] = {0, 0, -1, 1};
-    for (int d = 0; d < 4; d++) {
+    // 8 neighbours: 4 orthogonal + 4 diagonal
+    const int dx[] = {-1, 1, 0, 0, -1, 1, -1, 1};
+    const int dy[] = { 0, 0,-1, 1, -1,-1,  1, 1};
+    for (int d = 0; d < 8; d++) {
         int nc = col + dx[d], nr = row + dy[d];
         if (nc < 0 || nc >= GRID_COLS || nr < 0 || nr >= GRID_ROWS) continue;
         for (int i = 0; i < MAX_BRICKS; i++) {
@@ -799,7 +801,7 @@ void SpawnNewRow(Game *g) {
             WriteSaveData(g);
         }
         // Level-up bonus: extra balls to keep up with rising difficulty
-        g->ballCount += 6;
+        g->ballCount += LEVEL_UP_BALL_BONUS;
         g->theme        = GetThemeForLevel(g->level);
         g->levelUpTimer = 0.0f;
         g->state        = STATE_LEVEL_UP;
@@ -852,7 +854,9 @@ void ResetGame(Game *g, int startLevel) {
     g->state        = STATE_PLAYING;
     g->round        = 1;
     g->level        = startLevel;
-    g->ballCount    = INITIAL_BALLS;
+    // Start with the ball count this level should naturally have:
+    // base + per-level bonus for every level already cleared.
+    g->ballCount    = INITIAL_BALLS + (startLevel - 1) * LEVEL_UP_BALL_BONUS;
     g->launcherX    = LAUNCHER_X;
     g->aimDir       = (Vector2){0.0f, -1.0f};
     g->soundEnabled = snd;
@@ -1095,6 +1099,11 @@ void UpdateLevelSelect(Game *g, float dt) {
     // Reset level progress (locks everything past level 1)
     if (IsKeyPressed(KEY_R)) {
         g->unlockedLevels = 1;
+        WriteSaveData(g);
+    }
+    // Unlock ALL levels at once
+    if (IsKeyPressed(KEY_O)) {
+        g->unlockedLevels = MAX_SELECTABLE_LEVELS;
         WriteSaveData(g);
     }
 }
@@ -1981,7 +1990,9 @@ void DrawLevelSelect(const Game *g) {
     int pgw = MeasureText(progBuf, 13);
     DrawText(progBuf, (SCREEN_W - pgw)/2, SCREEN_H - 24, 13, Fade(WHITE, 0.28f));
 
-    // Reset hint
+    // Cheat / reset hints
+    const char *oh = "[O] Unlock All";
+    DrawText(oh, 10, SCREEN_H - 16, 11, Fade(WHITE, 0.22f));
     const char *rh = "[R] Reset Progress";
     int rhw = MeasureText(rh, 11);
     DrawText(rh, SCREEN_W - rhw - 10, SCREEN_H - 16, 11, Fade(WHITE, 0.22f));
@@ -2022,7 +2033,7 @@ void DrawLevelUp(const Game *g) {
     int sbw = MeasureText(sub, 22);
     DrawText(sub, (SCREEN_W - sbw)/2, 330, 22, Fade(WHITE, alpha * 0.85f));
 
-    const char *bonus = "+6 BALLS";
+    const char *bonus = "+8 BALLS";
     int bbw = MeasureText(bonus, 20);
     DrawText(bonus, (SCREEN_W - bbw)/2 + 1, 397, 20, Fade(BLACK, alpha * 0.6f));
     DrawText(bonus, (SCREEN_W - bbw)/2,     396, 20, Fade((Color){255, 215, 60, 255}, alpha));
