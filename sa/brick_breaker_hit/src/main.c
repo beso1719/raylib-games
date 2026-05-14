@@ -134,7 +134,7 @@ typedef struct {
     Shockwave  shockwaves[MAX_SHOCKWAVES];
     Star       stars[MAX_STARS];
 
-    Sound  sndHit, sndDestroy, sndPickup, sndGameOver, sndRoundEnd, sndLevelUp, sndBoom, sndMegaBoom;
+    Sound  sndHit, sndDestroy, sndPickup, sndGameOver, sndRoundEnd, sndLevelUp, sndBoom, sndMegaBoom, sndCelebration;
     bool   soundEnabled, audioReady;
 
     Highscore highscores;
@@ -221,6 +221,8 @@ void  InsertHighscore(Highscore *hs, const char *name, int score);
 Sound GenerateBeep(float freq, float dur, float vol);
 Sound GenerateBoom(float dur, float vol);
 Sound GenerateMegaBoom(float dur, float vol);
+Sound GenerateCelebrationLoop(void);
+Image BuildAppIcon(void);
 void  PlaySfx(const Game *g, Sound snd);
 void  SpawnBrickParticles(Game *g, int col, int row, Color c);
 void  SpawnMenuOrb(Game *g);
@@ -447,8 +449,68 @@ Sound GenerateMegaBoom(float dur, float vol) {
     return s;
 }
 
+// Bright C-major celebration loop: 16 notes (~4.8s) with envelopes + 2nd
+// harmonic + light vibrato. Loopable.
+Sound GenerateCelebrationLoop(void) {
+    const int sampleRate = 44100;
+    const float noteDur  = 0.30f;
+    // C5 E5 G5 C6 G5 E5 G5 C6  A5 C6 E6 A5 G5 E5 C5 rest
+    const float notes[] = {
+        523.25f, 659.25f, 783.99f, 1046.50f,
+        783.99f, 659.25f, 783.99f, 1046.50f,
+        880.00f, 1046.50f, 1318.51f, 880.00f,
+        783.99f, 659.25f, 523.25f, 0.0f
+    };
+    const int n = (int)(sizeof(notes) / sizeof(notes[0]));
+    int totalSamples = (int)(sampleRate * noteDur * n);
+    short *data = (short *)malloc(totalSamples * sizeof(short));
+    if (!data) return (Sound){0};
+
+    for (int i = 0; i < n; i++) {
+        int s0 = (int)(sampleRate * noteDur * i);
+        int s1 = (int)(sampleRate * noteDur * (i + 1));
+        if (s1 > totalSamples) s1 = totalSamples;
+        float f = notes[i];
+        for (int j = s0; j < s1; j++) {
+            if (f <= 0.0f) { data[j] = 0; continue; }
+            float tNote = (float)(j - s0) / sampleRate;
+            float local = tNote / noteDur;            // 0..1 within note
+            // Attack-sustain-release envelope
+            float env;
+            if (local < 0.06f)      env = local / 0.06f;
+            else if (local > 0.78f) env = (1.0f - local) / 0.22f;
+            else                    env = 1.0f;
+            if (env < 0.0f) env = 0.0f;
+
+            float vib = 1.0f + 0.005f * sinf(2.0f * PI * 5.0f * tNote);
+            float fundamental = sinf(2.0f * PI * f * vib * tNote);
+            float harmonic2   = sinf(2.0f * PI * f * 2.0f * tNote) * 0.30f;
+            float harmonic3   = sinf(2.0f * PI * f * 3.0f * tNote) * 0.12f;
+            float s = (fundamental + harmonic2 + harmonic3) * 0.28f * env;
+            if (s >  1.0f) s =  1.0f;
+            if (s < -1.0f) s = -1.0f;
+            data[j] = (short)(s * 32767.0f);
+        }
+    }
+
+    Wave w = { .frameCount = (unsigned int)totalSamples, .sampleRate = 44100,
+               .sampleSize = 16, .channels = 1, .data = data };
+    Sound s = LoadSoundFromWave(w);
+    free(data);
+    return s;
+}
+
 void PlaySfx(const Game *g, Sound snd) {
     if (g->soundEnabled && g->audioReady) PlaySound(snd);
+}
+
+static void PlayCelebrationLoop(const Game *g) {
+    if (!g->soundEnabled || !g->audioReady) return;
+    if (!IsSoundPlaying(g->sndCelebration)) PlaySound(g->sndCelebration);
+}
+
+static void StopCelebration(const Game *g) {
+    if (g->audioReady) StopSound(g->sndCelebration);
 }
 
 // ── Particles ─────────────────────────────────────────────────────────────────
@@ -858,6 +920,7 @@ void InitGame(Game *g) {
         g->sndLevelUp  = GenerateBeep(990.0f,  0.35f, 0.75f);
         g->sndBoom     = GenerateBoom(0.55f, 0.95f);
         g->sndMegaBoom = GenerateMegaBoom(0.95f, 1.0f);
+        g->sndCelebration = GenerateCelebrationLoop();
     }
 
     LoadSaveData(g);
@@ -868,7 +931,7 @@ void InitGame(Game *g) {
 
 void ResetGame(Game *g, int startLevel) {
     Sound h = g->sndHit, d = g->sndDestroy, pk = g->sndPickup;
-    Sound go = g->sndGameOver, re = g->sndRoundEnd, lu = g->sndLevelUp, bm = g->sndBoom, mb = g->sndMegaBoom;
+    Sound go = g->sndGameOver, re = g->sndRoundEnd, lu = g->sndLevelUp, bm = g->sndBoom, mb = g->sndMegaBoom, ce = g->sndCelebration;
     bool snd = g->soundEnabled, aud = g->audioReady;
     Highscore hs       = g->highscores;
     int unlocked       = g->unlockedLevels;
@@ -888,7 +951,7 @@ void ResetGame(Game *g, int startLevel) {
     g->soundEnabled = snd;
     g->audioReady   = aud;
     g->sndHit       = h; g->sndDestroy = d; g->sndPickup = pk;
-    g->sndGameOver  = go; g->sndRoundEnd = re; g->sndLevelUp = lu; g->sndBoom = bm; g->sndMegaBoom = mb;
+    g->sndGameOver  = go; g->sndRoundEnd = re; g->sndLevelUp = lu; g->sndBoom = bm; g->sndMegaBoom = mb; g->sndCelebration = ce;
     g->highscores   = hs;
     g->unlockedLevels = unlocked;
     g->theme        = GetThemeForLevel(startLevel);
@@ -1290,6 +1353,7 @@ void UpdateHighscoreEntry(Game *g) {
 void UpdateCredits(Game *g, float dt) {
     g->creditsTimer += dt;
     UpdateParticles(g, dt);
+    PlayCelebrationLoop(g);
     // Keep a few drifting menu orbs alive in the background
     int orbCount = 0;
     for (int i = 0; i < MAX_PARTICLES; i++)
@@ -1298,9 +1362,13 @@ void UpdateCredits(Game *g, float dt) {
 
     if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_ENTER) ||
         IsKeyPressed(KEY_BACKSPACE) || IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+        StopCelebration(g);
         g->state = STATE_MENU;
     }
-    if (IsKeyPressed(KEY_M)) g->soundEnabled = !g->soundEnabled;
+    if (IsKeyPressed(KEY_M)) {
+        g->soundEnabled = !g->soundEnabled;
+        if (!g->soundEnabled) StopCelebration(g);
+    }
 }
 
 // ── Update: Victory (after clearing level 20) ─────────────────────────────────
@@ -1308,6 +1376,7 @@ void UpdateVictory(Game *g, float dt) {
     g->victoryTimer += dt;
     UpdateParticles(g, dt);
     UpdateShockwaves(g, dt);
+    PlayCelebrationLoop(g);
     // Continuous fireworks: spawn an explosion FX in a random spot every so often
     if (GetRandomValue(0, 8) == 0) {
         Vector2 p = {(float)GetRandomValue(60, SCREEN_W - 60),
@@ -1318,6 +1387,7 @@ void UpdateVictory(Game *g, float dt) {
     if (g->victoryTimer >= 1.5f &&
         (IsKeyPressed(KEY_ENTER) || IsKeyPressed(KEY_ESCAPE) ||
          IsMouseButtonPressed(MOUSE_LEFT_BUTTON))) {
+        StopCelebration(g);
         if (IsNewHighscore(&g->highscores, g->score)) {
             g->inputLen = 0;
             memset(g->inputName, 0, NAME_LEN);
@@ -1326,7 +1396,10 @@ void UpdateVictory(Game *g, float dt) {
             g->state = STATE_MENU;
         }
     }
-    if (IsKeyPressed(KEY_M)) g->soundEnabled = !g->soundEnabled;
+    if (IsKeyPressed(KEY_M)) {
+        g->soundEnabled = !g->soundEnabled;
+        if (!g->soundEnabled) StopCelebration(g);
+    }
 }
 
 // ── Update: Highscore View ────────────────────────────────────────────────────
@@ -2504,10 +2577,73 @@ void DrawVictory(const Game *g) {
     }
 }
 
+// ── App icon (runtime image for window/taskbar) ───────────────────────────────
+// Builds a 64x64 PIXELART-style icon entirely from raylib draw calls. Used by
+// SetWindowIcon so the running window + taskbar show the icon (Explorer uses
+// the .exe-embedded ICO; window/taskbar uses this runtime image).
+Image BuildAppIcon(void) {
+    const int S = 64;
+    Image img = GenImageColor(S, S, (Color){0, 0, 0, 0});
+
+    // Rounded-ish dark blue gradient background
+    for (int y = 0; y < S; y++) {
+        for (int x = 0; x < S; x++) {
+            // Corner mask for "rounded rect" look
+            int cx = (x < 6) ? (6 - x) : (x > S - 7 ? x - (S - 7) : 0);
+            int cy = (y < 6) ? (6 - y) : (y > S - 7 ? y - (S - 7) : 0);
+            int dist2 = cx * cx + cy * cy;
+            if (dist2 > 36) continue;
+            float t = (float)y / S;
+            unsigned char r = (unsigned char)(12 + 28 * t);
+            unsigned char g = (unsigned char)(18 + 42 * t);
+            unsigned char b = (unsigned char)(48 + 60 * t);
+            ImageDrawPixel(&img, x, y, (Color){r, g, b, 255});
+        }
+    }
+
+    // Bricks row 1
+    ImageDrawRectangle(&img,  6, 12, 16, 10, (Color){240,  90,  90, 255});
+    ImageDrawRectangle(&img,  6, 12, 16,  4, (Color){255, 200, 200, 110});
+    ImageDrawRectangle(&img, 25, 12, 16, 10, (Color){255, 165,  30, 255});
+    ImageDrawRectangle(&img, 25, 12, 16,  4, (Color){255, 220, 160, 110});
+    ImageDrawRectangle(&img, 44, 12, 14, 10, (Color){ 90, 200, 230, 255});
+    ImageDrawRectangle(&img, 44, 12, 14,  4, (Color){180, 230, 245, 110});
+    // Bricks row 2
+    ImageDrawRectangle(&img, 15, 24, 16, 10, (Color){180, 110, 230, 255});
+    ImageDrawRectangle(&img, 15, 24, 16,  4, (Color){220, 180, 245, 110});
+    ImageDrawRectangle(&img, 34, 24, 16, 10, (Color){ 90, 230, 130, 255});
+    ImageDrawRectangle(&img, 34, 24, 16,  4, (Color){180, 245, 200, 110});
+
+    // Glowing ball (bottom right)
+    ImageDrawCircle(&img, 42, 46, 11, (Color){ 80, 170, 240,  40});
+    ImageDrawCircle(&img, 42, 46,  8, (Color){120, 200, 255,  90});
+    ImageDrawCircle(&img, 42, 46,  6, (Color){245, 250, 255, 255});
+    ImageDrawPixel (&img, 39, 43,    (Color){255, 255, 255, 255});
+
+    // Trajectory dots (heading down-right to ball)
+    for (int i = 0; i < 4; i++) {
+        int dx = 30 - i * 4;
+        int dy = 38 + i * 2;
+        ImageDrawCircle(&img, dx, dy, 1, (Color){120, 200, 255, (unsigned char)(220 - i * 50)});
+    }
+
+    // Launcher (bottom left)
+    ImageDrawCircle(&img, 14, 54, 7, (Color){ 60, 200, 255,  70});
+    ImageDrawCircle(&img, 14, 54, 5, (Color){255, 255, 255, 230});
+    ImageDrawCircle(&img, 14, 54, 3, (Color){ 60, 200, 255, 255});
+
+    return img;
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 int main(void) {
     InitWindow(SCREEN_W, SCREEN_H, "Bricks Breaker Hit");
     SetExitKey(KEY_NULL);   // ESC must NOT close the window — game manages ESC itself
+    // Set the runtime window/taskbar icon (separate from the .exe-embedded ICO
+    // used by Explorer). Built from raylib primitives — no asset file needed.
+    Image appIcon = BuildAppIcon();
+    SetWindowIcon(appIcon);
+    UnloadImage(appIcon);
     SetTargetFPS(60);
     InitAudioDevice();
 
@@ -2552,6 +2688,7 @@ int main(void) {
         UnloadSound(g->sndPickup); UnloadSound(g->sndGameOver);
         UnloadSound(g->sndRoundEnd); UnloadSound(g->sndLevelUp);
         UnloadSound(g->sndBoom); UnloadSound(g->sndMegaBoom);
+        UnloadSound(g->sndCelebration);
         CloseAudioDevice();
     }
     free(g);
