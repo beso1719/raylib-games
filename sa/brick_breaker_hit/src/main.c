@@ -164,6 +164,9 @@ typedef struct {
     // Credits / Victory animation timers
     float  creditsTimer;
     float  victoryTimer;
+
+    // Highscore view: selected row for deletion (-1 = none)
+    int    hsSel;
 } Game;
 
 // ── Level themes (12 unique) ──────────────────────────────────────────────────
@@ -219,6 +222,7 @@ void  LoadSaveData(Game *g);
 void  WriteSaveData(const Game *g);
 bool  IsNewHighscore(const Highscore *hs, int score);
 void  InsertHighscore(Highscore *hs, const char *name, int score);
+void  RemoveHighscore(Highscore *hs, int idx);
 Sound GenerateBeep(float freq, float dur, float vol);
 Sound GenerateBoom(float dur, float vol);
 Sound GenerateMegaBoom(float dur, float vol);
@@ -780,6 +784,13 @@ void InsertHighscore(Highscore *hs, const char *name, int score) {
     hs->entries[pos].name[NAME_LEN - 1] = '\0';
     hs->entries[pos].score = score;
     if (hs->count < MAX_SCORES) hs->count++;
+}
+
+void RemoveHighscore(Highscore *hs, int idx) {
+    if (idx < 0 || idx >= hs->count) return;
+    for (int i = idx; i < hs->count - 1; i++) hs->entries[i] = hs->entries[i + 1];
+    hs->count--;
+    memset(&hs->entries[hs->count], 0, sizeof(ScoreEntry));
 }
 
 // ── Brick color ───────────────────────────────────────────────────────────────
@@ -1408,6 +1419,40 @@ void UpdateVictory(Game *g, float dt) {
 // ── Update: Highscore View ────────────────────────────────────────────────────
 void UpdateHighscoreView(Game *g) {
     if (IsKeyPressed(KEY_M)) g->soundEnabled = !g->soundEnabled;
+
+    int n = g->highscores.count;
+    if (n > 0) {
+        if (g->hsSel < 0)  g->hsSel = 0;
+        if (g->hsSel >= n) g->hsSel = n - 1;
+
+        // Navigate
+        if (IsKeyPressed(KEY_DOWN) || IsKeyPressed(KEY_S)) g->hsSel = (g->hsSel + 1) % n;
+        if (IsKeyPressed(KEY_UP)   || IsKeyPressed(KEY_W)) g->hsSel = (g->hsSel - 1 + n) % n;
+
+        // Mouse hover-select on rows
+        Vector2 m = GetMousePosition();
+        for (int i = 0; i < n && i < MAX_SCORES; i++) {
+            Rectangle row = {28, (float)(158 + i * 54) - 5, SCREEN_W - 56, 44};
+            if (CheckCollisionPointRec(m, row)) { g->hsSel = i; break; }
+        }
+
+        // Delete selected entry
+        if (IsKeyPressed(KEY_DELETE) || IsKeyPressed(KEY_D) || IsKeyPressed(KEY_BACKSPACE)) {
+            RemoveHighscore(&g->highscores, g->hsSel);
+            WriteSaveData(g);
+            if (g->hsSel >= g->highscores.count) g->hsSel = g->highscores.count - 1;
+        }
+        // Clear ALL
+        if (IsKeyPressed(KEY_C)) {
+            g->highscores.count = 0;
+            memset(g->highscores.entries, 0, sizeof(g->highscores.entries));
+            WriteSaveData(g);
+            g->hsSel = -1;
+        }
+    } else {
+        g->hsSel = -1;
+    }
+
     if (IsKeyPressed(KEY_ESCAPE) || IsKeyPressed(KEY_ENTER)) g->state = STATE_MENU;
 }
 
@@ -2352,11 +2397,20 @@ void DrawHighscoreView(const Game *g) {
 
     for (int i = 0; i < g->highscores.count && i < MAX_SCORES; i++) {
         int y = 158 + i * 54;
+        Rectangle row = {28, (float)y - 5, SCREEN_W-56, 44};
         // Row glow for top 3
         if (i < 3) {
             Color hl = rankCol[i]; hl.a = 22;
-            DrawRectangleRounded((Rectangle){28, (float)y - 5, SCREEN_W-56, 44}, 0.25f, 4, hl);
-            DrawRectangleRoundedLines((Rectangle){28, (float)y - 5, SCREEN_W-56, 44}, 0.25f, 4, Fade(rankCol[i], 0.15f));
+            DrawRectangleRounded(row, 0.25f, 4, hl);
+            DrawRectangleRoundedLines(row, 0.25f, 4, Fade(rankCol[i], 0.15f));
+        }
+        // Selection highlight (for deletion)
+        if (i == g->hsSel) {
+            float pulse = 0.5f + 0.5f * sinf((float)GetTime() * 5.0f);
+            Color selC = (Color){255, 70, 70, 255};
+            DrawRectangleRounded(row, 0.25f, 4, Fade(selC, 0.15f + pulse * 0.10f));
+            DrawRectangleRoundedLines(row, 0.25f, 4, Fade(selC, 0.55f + pulse * 0.35f));
+            DrawText(">", 18, y + 7, 20, Fade(selC, 0.8f + pulse * 0.2f));
         }
         DrawText(medals[i], 38, y + 7, 20, rankCol[i]);
         DrawText(g->highscores.entries[i].name, 80, y + 7, 20, rankCol[i]);
@@ -2374,9 +2428,14 @@ void DrawHighscoreView(const Game *g) {
     DrawLineEx((Vector2){(float)(SCREEN_W/2 - 100), 446.0f},
                (Vector2){(float)(SCREEN_W/2 + 100), 446.0f}, 1.5f, Fade(WHITE, 0.10f));
     float blink = 0.5f + 0.5f * sinf((float)GetTime() * 2.5f);
-    const char *back = "[ESC] / [ENTER]  Back";
-    int bw = MeasureText(back, 16);
-    DrawText(back, (SCREEN_W - bw)/2, 458, 16, Fade(LIGHTGRAY, blink));
+    if (g->highscores.count > 0) {
+        const char *del = "[UP/DOWN] Select   [DEL] Delete   [C] Clear All";
+        int dw = MeasureText(del, 14);
+        DrawText(del, (SCREEN_W - dw)/2, 452, 14, Fade((Color){255,140,140,255}, 0.65f));
+    }
+    const char *back = "[ESC] / [ENTER]  Back to Menu";
+    int bw = MeasureText(back, 15);
+    DrawText(back, (SCREEN_W - bw)/2, 474, 15, Fade(LIGHTGRAY, 0.4f + blink * 0.4f));
 }
 
 // ── Draw: Credits ─────────────────────────────────────────────────────────────
