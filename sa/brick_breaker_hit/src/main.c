@@ -2024,7 +2024,7 @@ void DrawMenu(const Game *g) {
     DrawText(t1, (SCREEN_W-tw1)/2 + 2, 110, 28, Fade(BLACK, 0.75f));
     DrawText(t1, (SCREEN_W-tw1)/2, 107, 28, ColorFromHSV(hue, 0.55f, 0.95f));
 
-    const char *t2 = "PATLICAN";
+    const char *t2 = "NABCAN";
     int tw2 = MeasureText(t2, 72);
     // Text shadow + glow
     DrawText(t2, (SCREEN_W-tw2)/2 + 3, 143, 72, Fade(BLACK, 0.85f));
@@ -2442,7 +2442,7 @@ void DrawCredits(const Game *g) {
     DrawText(title, (SCREEN_W - tw)/2, 75, tfs, ColorFromHSV(hue, 0.7f, 1.0f));
 
     // Subtitle
-    const char *sub = "PATLICAN";
+    const char *sub = "NABCAN";
     int sw = MeasureText(sub, 18);
     DrawText(sub, (SCREEN_W - sw)/2, 140, 18, Fade(WHITE, 0.75f));
     const char *sub2 = "built with C and raylib";
@@ -2643,7 +2643,7 @@ Image BuildAppIcon(void) {
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 int main(void) {
-    InitWindow(SCREEN_W, SCREEN_H, "PATLICAN");
+    InitWindow(SCREEN_W, SCREEN_H, "NABCAN");
     SetExitKey(KEY_NULL);   // ESC must NOT close the window — game manages ESC itself
     // Set the runtime window/taskbar icon (separate from the .exe-embedded ICO
     // used by Explorer). Built from raylib primitives — no asset file needed.
